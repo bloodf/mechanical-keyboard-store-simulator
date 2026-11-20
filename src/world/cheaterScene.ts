@@ -9,6 +9,7 @@ import type { SceneController } from "./stage";
 export class CheaterScene implements SceneController {
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+  maxFps = 30;
   private disposables: { dispose(): void }[] = [];
   private membrane = new THREE.Group();
   private pupils: THREE.Mesh[] = [];

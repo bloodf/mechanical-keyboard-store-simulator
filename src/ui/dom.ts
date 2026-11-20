@@ -1,3 +1,5 @@
+import { play } from "../audio/engine";
+
 type Child = Node | string | null | undefined | false;
 
 /** Tiny hyperscript helper: h("button", { class: "btn", onclick }, "Text"). */
@@ -32,6 +34,7 @@ export function clearUi() {
 }
 
 export function toast(text: string, kind: "info" | "error" = "info") {
+  play(kind === "error" ? "ui.error" : "ui.toast");
   const el = h("div", { class: `toast toast-${kind}`, role: "status" }, text);
   document.body.append(el);
   setTimeout(() => el.classList.add("out"), 1600);

@@ -18,6 +18,7 @@ async function run(name, contextOpts) {
   const browser = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
   const ctx = await browser.newContext(contextOpts);
   const page = await ctx.newPage();
+  page.setDefaultTimeout(120000);
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
@@ -27,6 +28,28 @@ async function run(name, contextOpts) {
   await page.waitForTimeout(1500);
   await page.screenshot({ path: path.join(OUT, `${name}-1-title.png`) });
   assert((await page.locator("#btn-continue").count()) === 0, "fresh browser has no Continue button");
+
+  // Settings: change a volume, it is remembered across reloads
+  await page.click("#btn-settings");
+  await page.waitForSelector("#settings");
+  await page.locator("#vol-voice").fill("35");
+  await page.screenshot({ path: path.join(OUT, `${name}-1b-settings.png`) });
+  await page.click("#settings-close");
+  const vol = await page.evaluate(() => JSON.parse(localStorage.getItem("mkss.settings.audio")).voice);
+  assert(Math.abs(vol - 0.35) < 1e-9, "volume setting is saved");
+
+  // Sound board (dev only): every sound button plays without errors
+  if (await page.locator("#debug").count()) {
+    await page.click("#debug summary");
+    await page.click("#dbg-sounds");
+    await page.waitForSelector("#sound-board");
+    const n = await page.locator("[data-sfx]").count();
+    for (let i = 0; i < n; i++) await page.locator("[data-sfx]").nth(i).click();
+    await page.locator(".sb-type").pressSequentially("thock ", { delay: 30 });
+    await page.screenshot({ path: path.join(OUT, `${name}-1c-soundboard.png`) });
+    await page.click("#sound-board-close");
+    assert(n >= 50, `sound board plays all ${n} sounds`);
+  }
 
   await page.click("#btn-new");
   await page.waitForSelector("#hud-money");
@@ -51,6 +74,7 @@ async function run(name, contextOpts) {
 
   // A second tab takes over; the first one pauses without false cheating alarms.
   const tab2 = await ctx.newPage();
+  tab2.setDefaultTimeout(120000);
   await tab2.goto(BASE, { timeout: 90000 }); // software GL in CI is slow with two tabs
   await page.waitForSelector("#other-tab");
   assert(true, "opening a second tab pauses the first one");

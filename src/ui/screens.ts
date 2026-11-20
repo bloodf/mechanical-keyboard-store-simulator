@@ -1,7 +1,8 @@
 import { formatMoney, formatNumber, t } from "../i18n";
 import type { GameState } from "../core/state";
 import { h, uiRoot, clearUi } from "./dom";
-import { sadTrombone, siren, unlockAudio } from "../audio/synth";
+import { play, unlockAudio } from "../audio/engine";
+import { openSettings, openSoundBoard } from "./audioPanels";
 
 export function showTitle(opts: {
   save: GameState | null;
@@ -30,6 +31,7 @@ export function showTitle(opts: {
       },
       t("title.newGame"),
     ),
+    h("button", { class: "btn", id: "btn-settings", onclick: () => openSettings() }, t("settings.open")),
   );
   uiRoot().append(
     h(
@@ -45,6 +47,7 @@ export function showTitle(opts: {
 }
 
 function confirmNew(onYes: () => void) {
+  play("ui.open");
   const dlg = h(
     "div",
     { class: "modal-backdrop", id: "confirm-new" },
@@ -55,12 +58,12 @@ function confirmNew(onYes: () => void) {
       h(
         "div",
         { class: "row" },
-        h("button", { class: "btn", onclick: () => dlg.remove() }, t("title.confirmNo")),
+        h("button", { class: "btn", onclick: () => (play("ui.close"), dlg.remove()) }, t("title.confirmNo")),
         h("button", { class: "btn btn-danger", id: "btn-confirm-new", onclick: () => (dlg.remove(), onYes()) }, t("title.confirmYes")),
       ),
     ),
   );
-  uiRoot().append(dlg);
+  document.body.append(dlg);
 }
 
 export interface Hud {
@@ -77,7 +80,12 @@ export function showShop(state: GameState, onMenu: () => void): Hud {
     "div",
     { class: "hud" },
     h("div", { class: "hud-left" }, day, money, rep, badge),
-    h("button", { class: "btn btn-small", id: "btn-menu", onclick: onMenu }, t("hud.backToTitle")),
+    h(
+      "div",
+      { class: "hud-right" },
+      h("button", { class: "btn btn-small", id: "btn-hud-settings", "aria-label": t("settings.open"), title: t("settings.open"), onclick: () => openSettings() }, "⚙"),
+      h("button", { class: "btn btn-small", id: "btn-menu", onclick: () => (play("ui.back"), onMenu()) }, t("hud.backToTitle")),
+    ),
   );
   const card = h(
     "div",
@@ -112,7 +120,7 @@ export function showCheater(cheatCount: number, onStartOver: () => void) {
       hidden: true,
       onclick: () => {
         unlockAudio();
-        sadTrombone();
+        play("cheat.trombone");
         btn.disabled = true;
         setTimeout(onStartOver, 600);
       },
@@ -138,7 +146,8 @@ export function showCheater(cheatCount: number, onStartOver: () => void) {
     if (played) return;
     played = true;
     unlockAudio();
-    siren(1.6);
+    play("cheat.siren");
+    play("cheat.buzzer", { delay: 1.7 });
   };
   window.addEventListener("pointerdown", playOnce, { once: true });
   window.addEventListener("keydown", playOnce, { once: true });
@@ -169,6 +178,7 @@ export function showDebug(actions: Record<"addMoney" | "nextDay" | "tamper" | "w
     h("button", { class: "btn btn-small", id: "dbg-money", onclick: actions.addMoney }, t("debug.addMoney")),
     h("button", { class: "btn btn-small", id: "dbg-day", onclick: actions.nextDay }, t("debug.nextDay")),
     h("button", { class: "btn btn-small", id: "dbg-tamper", onclick: actions.tamper }, t("debug.tamper")),
+    h("button", { class: "btn btn-small", id: "dbg-sounds", onclick: () => ((panel.open = false), openSoundBoard()) }, t("debug.soundBoard")),
     h("button", { class: "btn btn-small btn-danger", id: "dbg-wipe", onclick: actions.wipe }, t("debug.wipe")),
   );
   document.body.append(panel);
@@ -176,7 +186,8 @@ export function showDebug(actions: Record<"addMoney" | "nextDay" | "tamper" | "w
 
 export function showOtherTab(onUseHere: () => void) {
   document.getElementById("other-tab")?.remove();
-  uiRoot().append(
+  play("ui.open");
+  document.body.append(
     h(
       "div",
       { class: "modal-backdrop", id: "other-tab" },

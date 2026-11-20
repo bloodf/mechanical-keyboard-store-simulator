@@ -6,7 +6,7 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { Rng } from "../core/rng";
-import { keyClack } from "../audio/synth";
+import { play } from "../audio/engine";
 import { randomColorway } from "./colorway";
 import { animateKeys, buildKeyboard, type KeyboardModel } from "./keyboardModel";
 import type { SceneController } from "./stage";
@@ -14,15 +14,19 @@ import type { SceneController } from "./stage";
 export class TitleScene implements SceneController {
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(35, 1, 0.05, 100);
+  maxFps = 30;
   private kb: KeyboardModel;
   private disposables: { dispose(): void }[] = [];
   private nextPress = 0.6;
   private rng: Rng;
   private typingWord: string[] = [];
   private portrait = false;
+  /** Each title visit gets its own board sound, like each generated board. */
+  private sound: "kb.thock" | "kb.marbly" | "kb.clack";
 
   constructor(renderer: THREE.WebGLRenderer, seed: string = String(Math.random())) {
     this.rng = new Rng(seed);
+    this.sound = this.rng.pick(["kb.thock", "kb.marbly", "kb.clack"] as const);
     const s = this.scene;
     s.background = new THREE.Color("#efe3d3");
     s.fog = new THREE.Fog("#efe3d3", 6, 14);
@@ -178,7 +182,7 @@ export class TitleScene implements SceneController {
       const key = this.kb.keys.find((k) => k.label === label);
       if (key) {
         key.press = 1;
-        keyClack(0.7, label === "Space" ? 0.35 : 0.22);
+        play(label === "Space" ? "kb.spacebar" : this.sound, { volume: 0.35, pan: (key.mesh.position.x / 8) * 0.6 });
       }
       this.nextPress = this.rng.range(0.08, 0.2);
     }

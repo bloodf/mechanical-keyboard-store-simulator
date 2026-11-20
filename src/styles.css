@@ -13,8 +13,10 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: #efe3d3; overscroll-behavior: none; }
 #app, #gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-#ui { position: fixed; inset: 0; pointer-events: none; }
-#ui > * { pointer-events: auto; }
+/* Layers: canvas < #ui (10) < dev tools (20) < dialogs (45) < toasts (50) */
+#ui { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+/* Only real UI pieces take input; full-screen layers let taps pass through to what is below. */
+.modal-backdrop, .card, .screen > *, .hud > * { pointer-events: auto; }
 button { font: inherit; }
 [hidden] { display: none !important; }
 
@@ -58,7 +60,7 @@ button { font: inherit; }
 .version { margin: 0; font-size: 0.75rem; opacity: 0.55; }
 
 /* ---------- Modal ---------- */
-.modal-backdrop { position: absolute; inset: 0; background: rgba(30, 20, 10, 0.45); display: grid; place-items: center; padding: 20px; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 45; background: rgba(30, 20, 10, 0.45); display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; padding: 20px; }
 .modal { background: var(--paper); border-radius: var(--radius); padding: 22px; max-width: 420px; box-shadow: var(--shadow); text-align: center; font-weight: 700; }
 .row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 10px; }
 
@@ -106,9 +108,28 @@ button { font: inherit; }
 .toast-error { background: var(--danger); }
 .toast.out { opacity: 0; }
 .debug {
-  position: fixed; right: 0; top: 45%; z-index: 40; border-top-right-radius: 0 !important; border-bottom-right-radius: 0 !important; background: rgba(20, 20, 30, 0.85);
+  position: fixed; right: 0; top: 45%; z-index: 20; border-top-right-radius: 0 !important; border-bottom-right-radius: 0 !important; background: rgba(20, 20, 30, 0.85);
   color: #fff; border-radius: 12px; padding: 8px 10px; font-size: 0.85rem; display: flex; flex-direction: column; gap: 6px; max-width: 220px;
 }
 .debug[open] { display: flex; }
 .debug summary { cursor: pointer; font-weight: 800; }
 .debug .btn { width: 100%; margin-top: 6px; }
+
+/* ---------- Settings & sound board ---------- */
+.hud-right { display: flex; gap: 8px; }
+.modal-wide { width: min(720px, 100%); max-width: 720px; max-height: calc(100dvh - 40px); display: flex; flex-direction: column; text-align: left; }
+.modal-wide h2 { margin: 0 0 8px; text-align: center; }
+.modal-wide h3 { margin: 14px 0 6px; font-size: 1rem; }
+.modal-wide .row { margin-top: 14px; }
+.muted { opacity: 0.7; font-weight: 600; font-size: 0.9rem; margin: 4px 0; }
+.slider { display: grid; grid-template-columns: 1fr 1.3fr; align-items: center; gap: 12px; margin: 8px 0; font-weight: 700; }
+.slider input { width: 100%; accent-color: var(--accent); height: 28px; }
+.check { display: flex; gap: 10px; align-items: center; margin-top: 10px; font-weight: 700; }
+.check input { width: 22px; height: 22px; accent-color: var(--accent); }
+.sb-scroll { overflow-y: auto; padding-right: 4px; -webkit-overflow-scrolling: touch; }
+.sb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; padding-bottom: 6px; }
+.sb-btn { font-size: 0.85rem; }
+.sb-type-row { display: flex; gap: 8px; margin: 6px 0 4px; }
+.sb-select, .sb-type { font: inherit; font-weight: 700; border-radius: 10px; border: 2px solid #cdbfa9; padding: 8px 10px; background: #fff; }
+.sb-type { flex: 1; min-width: 0; }
+@media (max-width: 520px) { .slider { grid-template-columns: 1fr; gap: 2px; } }

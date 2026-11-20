@@ -8,7 +8,7 @@ import { TitleScene } from "./world/titleScene";
 import { CheaterScene } from "./world/cheaterScene";
 import { showCheater, showDebug, showOtherTab, showShop, showTitle, type Hud } from "./ui/screens";
 import { toast } from "./ui/dom";
-import { unlockAudio } from "./audio/synth";
+import { play, unlockAudio } from "./audio/engine";
 
 setLocale(navigator.language || "en");
 document.title = t("game.title");
@@ -22,9 +22,21 @@ let hud: Hud | null = null;
 let lastSaveAt = performance.now();
 let suspended = false; // another tab took over the store
 
-// Browsers only allow sound after a gesture.
-window.addEventListener("pointerdown", unlockAudio);
-window.addEventListener("keydown", unlockAudio);
+// Browsers only allow sound after a gesture (capture phase: runs before any click sound).
+window.addEventListener("pointerdown", unlockAudio, true);
+window.addEventListener("keydown", unlockAudio, true);
+
+// Every keycap-style button clicks; hovering with a mouse gives a soft tick.
+document.addEventListener("pointerdown", (e) => {
+  const b = (e.target as Element | null)?.closest?.(".btn") as HTMLButtonElement | null;
+  if (b && !b.disabled) play("ui.click");
+});
+document.addEventListener("pointerover", (e) => {
+  if (e.pointerType !== "mouse") return;
+  const b = (e.target as Element | null)?.closest?.(".btn");
+  const from = (e.relatedTarget as Element | null)?.closest?.(".btn");
+  if (b && b !== from) play("ui.hover");
+});
 
 /** Returns false if the session can't continue (cheater / other tab / wiped). */
 function persist(showToast = false): boolean {
@@ -67,7 +79,16 @@ if ("BroadcastChannel" in window) {
   channel.onmessage = (e) => {
     if (e.data === "hello") suspendForOtherTab();
   };
-  channel.postMessage("hello");
+  // The tab you're looking at owns the store. A tab opened/reloaded in the background
+  // only claims it once it becomes visible (so dev auto-reloads can't steal it).
+  let claimed = false;
+  const claim = () => {
+    if (claimed || document.hidden) return;
+    claimed = true;
+    channel.postMessage("hello");
+  };
+  claim();
+  document.addEventListener("visibilitychange", claim);
 }
 
 function goTitle() {
@@ -77,7 +98,11 @@ function goTitle() {
     save: state,
     persistent,
     onContinue: () => state && goShop(state),
-    onNew: () => goShop(saves.newGame()),
+    onNew: () => {
+      play("progress.dayStart");
+      play("shop.doorBell", { delay: 0.5 });
+      goShop(saves.newGame());
+    },
   });
 }
 
@@ -121,15 +146,22 @@ window.addEventListener("pagehide", () => persist());
 
 // Developer tools (only in `npm run dev`, never in the production build).
 if (import.meta.env.DEV) {
+  // Hook for the automated audio check (tests/e2e/audio.cjs).
+  void Promise.all([import("./audio/engine"), import("./audio/library")]).then(([engine, lib]) => {
+    (window as unknown as Record<string, unknown>).__mkssAudio = { renderOffline: engine.renderOffline, ids: lib.SFX_IDS };
+  });
   showDebug({
     addMoney: () => {
       if (!state) return;
+      play("money.register");
       state.money += 100_00;
       persist(true);
       hud?.update(state);
     },
     nextDay: () => {
       if (!state) return;
+      play("progress.dayEnd");
+      play("progress.dayStart", { delay: 1.5 });
       state.day += 1;
       persist(true);
       hud?.update(state);

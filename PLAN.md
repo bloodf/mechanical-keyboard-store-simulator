@@ -1,6 +1,6 @@
 # Mechanical Keyboard Store Simulator — Game Plan (draft v1)
 
-> Status: **Phase 0 done** (foundation, save, cheater screen). Next: Phase 1. Decisions are recorded in §0.
+> Status: **Phase 0 done** (foundation, save, cheater screen) **+ sound effects system.** Next: Phase 1. Decisions are recorded in §0.
 
 ---
 
@@ -12,6 +12,7 @@
 | Art | **100% generated in code.** Funny through animation, expressions, emotes and dialogue, **not** through bad models: humans must have believable human proportions, and the store must read clearly as a store. Stylized, clean, soft lighting. |
 | Language | English only, but **i18n-ready from day one**: every visible string goes through `t("key")`. |
 | Devices | **Desktop and mobile.** Keyboard + mouse, plus touch (virtual joystick, tap to interact, large buttons). |
+| Audio | **Sound effects only, no music.** Every sound is synthesized in code (no audio files), with small random variation each play. |
 | Gameplay depth | **Always arcade-like.** Mini-games are short, readable and forgiving. No simulation homework. |
 | Game length | **Endless sandbox** with **goals** that unlock new tools, materials and stock. |
 | Cheating | Funny cheater screen → save wiped → new game carries a permanent **"🤡 Known Cheater" badge**. |
@@ -43,7 +44,7 @@ exaggerated animation, facial expressions, emotes and writing.
 | Build tool | Vite | Fast dev server. Builds to plain static files you can host anywhere (itch.io, GitHub Pages, Netlify). |
 | 3D | Three.js | Mature WebGL library, works in every modern browser. No engine lock-in. |
 | UI / menus | HTML/CSS overlay (small framework-free layer, or Preact if it grows) | Menus, dialogue and inventory are easier to build in HTML than in 3D. |
-| Audio | Web Audio API, **synthesized** | Switch sounds are generated from the build's parts (see §6), so every build really sounds different. |
+| Audio | Web Audio API, **synthesized SFX only (no music)** | Every effect is generated in code. Switch sounds come from the build's parts (see §6), so every build really sounds different. |
 | Randomness | Seeded PRNG (e.g. `sfc32`/`mulberry32`) | "Always new" but reproducible, which helps debugging and lets us detect save tampering. |
 | Save | `localStorage` + Web Crypto (AES-GCM + HMAC-SHA-256) | See §8. |
 | Tests | Vitest (logic) + Playwright (in-browser smoke tests) | |
@@ -143,6 +144,26 @@ Customers describe what they want in words ("thocky", "creamy", "marbly", "poppy
 the office", "loud so my roommate hears"). Those words map to target ranges on the profile. The sound-check
 screen shows a radar chart (build vs. request) and a match %, and you can listen to both.
 
+### 6b. Sound effects catalog (no music)
+
+All sounds are generated live from code (`src/audio/library.ts`), with random variation on every play.
+Four volume channels the player controls in Settings: **Interface, Shop & workbench, Customer voices, Keyboard typing**
+(+ master and mute). A **sound board** in dev tools plays every effect. An automated check renders every sound
+offline and verifies it isn't silent, doesn't clip, fits its time budget, and has balanced loudness.
+
+| Group | Sounds (59 so far) |
+|---|---|
+| Interface | click, hover, confirm, back, error, toast, panel open/close, toggle |
+| Money | coin, cash register, spend |
+| Progress | goal complete, unlock, shop opens (bell), shutter closes, good/bad review |
+| Shop | door bell, footstep, angry stomp, door slam, delivery truck, box drop, box opening, shelf place, computer beep, notification |
+| Workbench | switch opener, spring, lube brush, screwdriver, soldering, keycap pull/place, PCB snap, foam, tape mod, stabilizer rattle, tester beep, dead key, build complete |
+| Keyboard typing | thocky, clacky, clicky, marbly, membrane, spacebar. Presets of the parametric key engine that Phase 5 drives from real parts |
+| Customers | talking, happy, question, angry, sad, laugh, gasp, grumble. Gibberish "Sims-style" voices from a formant synth; **each customer has their own voice** (pitch, size, speed, breathiness) |
+| Cheater | police siren, sad trombone, wrong buzzer |
+
+New sounds are added as features need them (e.g. positional 3D audio for customers in Phase 1/3).
+
 ---
 
 ## 7. Procedural generation ("never the same twice")
@@ -238,7 +259,7 @@ mechanical-keyboard-store-simulator/
     gen/                  # procedural: customers, names, dialogue grammar, requests, parts, events
     data/                 # part definitions, compatibility rules, sound coefficients
     build/                # workbench state machine + each mini-game
-    audio/                # keyboard sound synthesizer, sfx, music
+    audio/                # SFX engine + library, key-sound synth, customer voices (no music)
     ui/                   # HUD, dialogue box, inventory, computer/shop, menus, cheater screen
   tests/
 ```
@@ -259,7 +280,7 @@ We build a **playable vertical slice first**, then widen it.
 | **5. Sound engine** | Profile calculation + synthesizer + radar-chart sound check | Hear the difference between builds |
 | **6. Drama** | Membrane customer, angry customers, haggling, refunds, reviews, events | The funny part |
 | **7. Progression** | Days, rent, reputation, upgrades, unlocks, bankruptcy | A full run |
-| **8. Polish** | Tutorial, juice, music, settings, balancing, performance, mobile check | Shareable game |
+| **8. Polish** | Tutorial, juice, extra SFX passes, graphics settings, balancing, performance, mobile check | Shareable game |
 
 Every phase ends with automated tests (logic in Vitest, a headless-browser smoke test) plus a playable
 build you can try in your browser.
