@@ -24,6 +24,8 @@
 
 ---
 
+> **Art (v0.3, in progress):** assets are being rebuilt with a Blender-scripted modeling pipeline. See **ART.md**.
+
 ## 1. The pitch
 
 You run a small mechanical keyboard shop. Customers walk in with requests, for example:

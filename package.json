@@ -9,6 +9,8 @@
     "preview": "vite preview --host",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "test": "vitest run",
+    "art:layouts": "node --experimental-strip-types -e \"import('./src/data/layouts.ts').then(m=>{const o={};for(const id of m.LAYOUT_IDS)o[id]=m.getLayout(id);require('fs').writeFileSync('art/build/layouts.json',JSON.stringify(o))})\"",
+    "art:preview": "~/.venvs/bpy/bin/python art/blender/poc_keyboard.py hero",
     "test:e2e": "node tests/e2e/smoke.cjs && node tests/e2e/audio.cjs && node tests/e2e/build.cjs"
   },
   "dependencies": {
