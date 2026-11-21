@@ -183,26 +183,22 @@ export const HOUSING_SOUND: Record<SwitchHousing, SoundMods> = {
 
 // ---------- Keycaps ----------
 export type KeycapMaterial = "abs" | "pbt" | "pom";
-export type KeycapProfile = "low" | "standard" | "sphere" | "flat" | "deep";
 export const KEYCAP_MATERIAL_SOUND: Record<KeycapMaterial, SoundMods> = {
   abs: { brightness: 0.08, depth: -0.05, volume: 0.03 },
   pbt: { depth: 0.08, brightness: -0.05 },
   pom: { depth: 0.03, brightness: 0.04, scratch: -0.03 },
 };
+export type { KeycapProfile } from "./profiles";
+import type { KeycapProfile } from "./profiles";
 export const KEYCAP_PROFILE_SOUND: Record<KeycapProfile, SoundMods> = {
-  low: { depth: 0.06 },
-  standard: {},
-  sphere: { depth: -0.1, brightness: 0.07, volume: 0.08, hollow: 0.04 },
-  flat: { brightness: 0.04 },
-  deep: { depth: 0.03, volume: 0.05 },
-};
-/** Keycap height (u) and top shape for the 3D model. */
-export const KEYCAP_PROFILE_SHAPE: Record<KeycapProfile, { height: number; taper: number; sculpt: number; dish: number }> = {
-  low: { height: 0.4, taper: 0.16, sculpt: 1, dish: 0.02 },
-  standard: { height: 0.46, taper: 0.17, sculpt: 1.1, dish: 0.02 },
-  sphere: { height: 0.62, taper: 0.22, sculpt: 1.3, dish: 0.05 },
-  flat: { height: 0.42, taper: 0.12, sculpt: 0, dish: 0.03 },
-  deep: { height: 0.58, taper: 0.2, sculpt: 1.5, dish: 0.06 },
+  cherry: { depth: 0.06 },
+  oem: {},
+  sa: { depth: -0.1, brightness: 0.07, volume: 0.08, hollow: 0.04 },
+  dsa: { brightness: 0.05, depth: -0.02 },
+  xda: { brightness: 0.04 },
+  mt3: { depth: 0.03, volume: 0.05, hollow: 0.02 },
+  kat: { depth: 0.02, volume: 0.03 },
+  lp: { depth: -0.06, brightness: 0.1, volume: -0.05 },
 };
 
 export function isUnlocked(req: Requires | undefined, builds: number): boolean {

@@ -53,7 +53,7 @@ export function keycapSetOf(b: BuildSession, cat: Catalog): KeycapSet | undefine
   if (!b.keycapsId) return undefined;
   if (b.keycapsId === CUSTOM_KEYCAPS_ID) {
     if (!b.customColorway) return undefined;
-    return { id: CUSTOM_KEYCAPS_ID, brand: "", name: "", material: "pbt", profile: "low", colorway: b.customColorway, price: CUSTOM_KEYCAPS_PRICE };
+    return { id: CUSTOM_KEYCAPS_ID, brand: "", name: "", material: "pbt", profile: "cherry", colorway: b.customColorway, price: CUSTOM_KEYCAPS_PRICE };
   }
   return cat.keycaps.find((k) => k.id === b.keycapsId);
 }

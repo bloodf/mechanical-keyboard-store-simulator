@@ -6,13 +6,15 @@
 import { derive, type Rng } from "../core/rng";
 import { names } from "../i18n";
 import { COLOR_FAMILIES, randomColorway, type Colorway } from "../data/colorway";
-import { CASE_MATERIALS, type CaseColor, type CaseMaterial, type KeycapMaterial, type KeycapProfile, type Requires, type SwitchHousing, type SwitchType } from "./parts";
+import { CASE_MATERIALS, type CaseColor, type CaseMaterial, type KeycapMaterial, type Requires, type SwitchHousing, type SwitchType } from "./parts";
+import type { KeycapProfile, SwitchFamily } from "./profiles";
 import { classifyColor, hslToHex, mixHex } from "./color";
 
 export interface SwitchProduct {
   id: string;
   brand: string;
   name: string;
+  family: SwitchFamily; // mx / box fit MX PCBs & keycaps; choc needs a Choc PCB, plate and low-profile caps
   type: SwitchType;
   springG: number;
   housing: SwitchHousing;
@@ -20,6 +22,7 @@ export interface SwitchProduct {
   longPole: boolean;
   stemColor: string;
   housingColor: string;
+  bottomColor?: string;
   housingOpacity: number;
   pricePerSwitch: number; // cents
   requires?: Requires;
@@ -69,6 +72,7 @@ export function randomCaseColor(material: CaseMaterial, rnd: () => number): stri
 export const CUSTOM_COLOR_MATERIALS: CaseMaterial[] = ["plastic", "aluminum", "acrylic", "polycarbonate"];
 
 interface SwitchArchetype {
+  family?: SwitchFamily;
   type: SwitchType;
   housing: SwitchHousing;
   spring: number;
@@ -94,6 +98,12 @@ const ARCHETYPES: SwitchArchetype[] = [
   { type: "linear", housing: "pom", spring: 50, lubed: true, longPole: true, price: 70, builds: 5 },
   { type: "tactile", housing: "pc", spring: 45, lubed: false, price: 42, builds: 6 },
   { type: "linear", housing: "nylon", spring: 60, lubed: true, price: 95, builds: 8 },
+  { family: "box", type: "clicky", housing: "pc", spring: 65, lubed: false, price: 30, builds: 1 },
+  { family: "box", type: "tactile", housing: "pc", spring: 62, lubed: false, price: 34, builds: 2 },
+  { family: "box", type: "linear", housing: "pom", spring: 55, lubed: true, price: 52, builds: 4 },
+  { family: "choc", type: "linear", housing: "nylon", spring: 50, lubed: false, price: 28, builds: 1 },
+  { family: "choc", type: "tactile", housing: "nylon", spring: 55, lubed: false, price: 30, builds: 2 },
+  { family: "choc", type: "clicky", housing: "pc", spring: 50, lubed: false, price: 30, builds: 3 },
 ];
 
 const STEM_COLORS: Record<SwitchType, string[]> = {
@@ -114,21 +124,25 @@ interface CapArchetype {
   builds?: number;
 }
 const CAP_ARCHETYPES: CapArchetype[] = [
-  { material: "abs", profile: "standard" },
-  { material: "pbt", profile: "standard" },
-  { material: "pbt", profile: "low" },
-  { material: "abs", profile: "low" },
-  { material: "pbt", profile: "flat" },
-  { material: "abs", profile: "sphere", builds: 2 },
-  { material: "pbt", profile: "low", builds: 2 },
-  { material: "pbt", profile: "sphere", builds: 3 },
-  { material: "pom", profile: "low", builds: 4 },
-  { material: "pbt", profile: "deep", builds: 5 },
-  { material: "abs", profile: "deep", builds: 6 },
-  { material: "pom", profile: "flat", builds: 8 },
+  { material: "abs", profile: "oem" },
+  { material: "pbt", profile: "oem" },
+  { material: "pbt", profile: "cherry" },
+  { material: "abs", profile: "cherry" },
+  { material: "pbt", profile: "xda" },
+  { material: "pbt", profile: "dsa" },
+  { material: "abs", profile: "sa", builds: 2 },
+  { material: "pbt", profile: "cherry", builds: 2 },
+  { material: "pbt", profile: "lp", builds: 1 },
+  { material: "pbt", profile: "kat", builds: 3 },
+  { material: "pbt", profile: "sa", builds: 3 },
+  { material: "pom", profile: "cherry", builds: 4 },
+  { material: "pbt", profile: "mt3", builds: 5 },
+  { material: "abs", profile: "mt3", builds: 6 },
+  { material: "abs", profile: "lp", builds: 6 },
+  { material: "pom", profile: "xda", builds: 8 },
 ];
 const CAP_MATERIAL_PRICE: Record<KeycapMaterial, number> = { abs: 35_00, pbt: 60_00, pom: 90_00 };
-const CAP_PROFILE_PRICE: Record<KeycapProfile, number> = { standard: 0, low: 10_00, flat: 5_00, sphere: 30_00, deep: 25_00 };
+const CAP_PROFILE_PRICE: Record<KeycapProfile, number> = { oem: 0, cherry: 10_00, xda: 5_00, dsa: 5_00, sa: 30_00, mt3: 25_00, kat: 25_00, lp: 0 };
 
 const round5 = (cents: number) => Math.max(5_00, Math.round(cents / 5_00) * 5_00);
 
@@ -157,6 +171,7 @@ export function generateCatalog(seed: string): Catalog {
     const look = HOUSING_LOOK[a.housing];
     return {
       id: `sw.${i}`,
+      family: a.family ?? "mx",
       brand: rng.pick(brands.switch),
       name: uniqueName(() => `${rng.pick(n.switchAdj)} ${rng.pick(n.switchNoun)}`),
       type: a.type,
@@ -166,6 +181,7 @@ export function generateCatalog(seed: string): Catalog {
       longPole: !!a.longPole,
       stemColor: rng.pick(STEM_COLORS[a.type]),
       housingColor: rng.pick(look.colors),
+      bottomColor: a.housing === "pc" ? rng.pick(["#222326", "#f1efe9", "#dff1ff"]) : undefined,
       housingOpacity: look.opacity,
       pricePerSwitch: Math.max(10, Math.round(a.price * rng.range(0.85, 1.15))),
       requires: a.builds ? { builds: a.builds } : undefined,

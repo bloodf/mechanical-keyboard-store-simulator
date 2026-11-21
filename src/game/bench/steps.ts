@@ -685,7 +685,7 @@ export function keycapStep(ctx: StepCtx): StepView {
   let cascade = 0;
   const install = () => {
     const board = ctx.board();
-    const set = ctx.session.keycapsId === CUSTOM_KEYCAPS_ID ? { id: CUSTOM_KEYCAPS_ID, brand: "", name: "", material: "pbt" as const, profile: "low" as const, colorway: ctx.session.customColorway!, price: CUSTOM_KEYCAPS_PRICE } : ctx.catalog.keycaps.find((k) => k.id === ctx.session.keycapsId);
+    const set = ctx.session.keycapsId === CUSTOM_KEYCAPS_ID ? { id: CUSTOM_KEYCAPS_ID, brand: "", name: "", material: "pbt" as const, profile: "cherry" as const, colorway: ctx.session.customColorway!, price: CUSTOM_KEYCAPS_PRICE } : ctx.catalog.keycaps.find((k) => k.id === ctx.session.keycapsId);
     if (!board || !set) return;
     board.setKeycaps(set);
     board.setAllCaps(false, true);

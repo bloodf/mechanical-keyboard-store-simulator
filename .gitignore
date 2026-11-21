@@ -4,3 +4,6 @@ tests/e2e/screens
 .vite-dev.log
 .scratch
 art/build/*.png
+art/build/workshop/
+art/build/*.hdr
+__pycache__/

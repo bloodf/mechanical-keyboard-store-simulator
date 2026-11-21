@@ -1,6 +1,12 @@
 /**
- * Procedural keyboard, assembled layer by layer: case → foams → PCB (+tape on the back) → plate →
- * stabilizers → switches → keycaps. Real scale: 1u = 19.05 mm. Babylon port of the Phase-4 model.
+ * The keyboard, modeled to real dimensions (mm) and assembled layer by layer:
+ * case → bottom foams → PCB (+ tape on the back) → plate foam → plate → stabilizers → switches → keycaps.
+ *
+ * Spaces:
+ *  - `base`: desk level; parent it to the bench.
+ *  - `root`: tilted to the case's typing angle, 1 unit = 1u = 19.05 mm (the minigames work in these units).
+ *  - `mmNode`: child of root in millimeters, plate top at y = 0. All part geometry lives here.
+ * Babylon is left-handed: the typist looks toward −Z, so the number row is at −Z and +X is the typist's left.
  */
 import {
   Color3,
@@ -8,11 +14,12 @@ import {
   Matrix,
   Mesh,
   MeshBuilder,
+  PBRMaterial,
   Quaternion,
-  StandardMaterial,
   Texture,
   TransformNode,
   Vector3,
+  VertexData,
   type Ray,
   type Scene,
   type ShadowGenerator,
@@ -21,14 +28,42 @@ import earcut from "earcut";
 import type { KeycapSet, SwitchProduct } from "../../data/catalog";
 import { luminance } from "../../data/color";
 import { getLayout, needsStab, type KeyGeom, type Layout, type LayoutId } from "../../data/layouts";
-import { KEYCAP_PROFILE_SHAPE, type CaseMaterialDef, type PcbDef, type PlateDef, type StabDef } from "../../data/parts";
-import { roundedBox, roundedBoxData } from "../geometry";
+import type { CaseMaterial, CaseMaterialDef, PcbDef, PlateDef, StabDef } from "../../data/parts";
+import { FAMILY_GEO, PROFILE_GEO, profileRow, type SwitchFamily } from "../../data/profiles";
+import { Geo, rrect, type Pt } from "./geo";
+import { buildKeycap, PITCH } from "./keycapGeo";
+import { switchParts, whenSwitchModels } from "./switchModels";
 
 export const U = 0.01905; // meters per key unit
-const Y = { silicone: 0.04, caseFoam: 0.2, pcb: 0.46, peFoam: 0.515, plateFoam: 0.54, plate: 0.73, switchTop: 0.92, capBase: 1.08, wallTop: 0.98 };
-const BEZEL = 0.55;
-const ROW_TILT = [0.1, 0.06, 0, -0.05, -0.12, -0.14, -0.14];
-const ROW_LIFT = [0.04, 0.02, 0, 0.04, 0.1, 0.12, 0.12];
+const MM_U = 1 / PITCH; // units per mm
+
+interface CaseStyle {
+  bezel: number;
+  radius: number;
+  edge: "fillet" | "chamfer";
+  edgeSize: number;
+  wallTop: number; // above the plate top (MX-height boards)
+  tilt: number; // degrees
+  metal: number;
+  rough: number;
+  alpha?: number;
+  texture?: "wood" | "layers";
+}
+export const CASE_STYLE: Record<CaseMaterial, CaseStyle> = {
+  plastic: { bezel: 7, radius: 6, edge: "fillet", edgeSize: 2.5, wallTop: 5.5, tilt: 5, metal: 0, rough: 0.55 },
+  acrylic: { bezel: 8, radius: 3, edge: "chamfer", edgeSize: 0.4, wallTop: 5, tilt: 2, metal: 0, rough: 0.08, alpha: 0.55, texture: "layers" },
+  aluminum: { bezel: 10, radius: 3, edge: "chamfer", edgeSize: 1.6, wallTop: 6.5, tilt: 7, metal: 0.85, rough: 0.38 },
+  polycarbonate: { bezel: 9, radius: 8, edge: "fillet", edgeSize: 3.5, wallTop: 6, tilt: 6, metal: 0, rough: 0.22, alpha: 0.62 },
+  wood: { bezel: 12, radius: 2, edge: "chamfer", edgeSize: 1.0, wallTop: 6, tilt: 6, metal: 0, rough: 0.55, texture: "wood" },
+  brass: { bezel: 9, radius: 4, edge: "chamfer", edgeSize: 1.2, wallTop: 6.5, tilt: 7, metal: 1, rough: 0.25 },
+};
+
+/** Vertical stack (mm, plate top = 0) per switch family. */
+function stackOf(f: SwitchFamily) {
+  return f === "choc"
+    ? { plateT: 1.2, pcbTop: -2.2, pcbT: 1.6, floor: -7.5, wallAdj: -4.5, tiltAdj: -3 }
+    : { plateT: 1.5, pcbTop: -5.0, pcbT: 1.6, floor: -11.5, wallAdj: 0, tiltAdj: 0 };
+}
 
 interface Tween {
   node: TransformNode;
@@ -39,7 +74,7 @@ interface Tween {
   dur: number;
   done?: () => void;
 }
-const easeOutBack = (x: number) => 1 + 2.2 * Math.pow(x - 1, 3) + 1.2 * Math.pow(x - 1, 2);
+const easeOutCubic = (x: number) => 1 - Math.pow(1 - x, 3);
 const easeInOut = (x: number) => (x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2);
 
 function readableOn(legend: string, cap: string): string {
@@ -50,26 +85,35 @@ function readableOn(legend: string, cap: string): string {
 }
 
 export class Board {
+  readonly base: TransformNode;
   readonly root: TransformNode;
+  private mmNode: TransformNode;
   readonly layout: Layout;
+  family: SwitchFamily = "mx";
   private owned: { dispose(): void }[] = [];
   private tweens: Tween[] = [];
   private caseNode: TransformNode;
   private pcbNode: TransformNode;
-  /** Child of the PCB, on its back side (tape strips, minigame lane guides). */
+  /** Child of the PCB, on its back side, in key units (tape strips, minigame lane guides). */
   readonly tapeNode: TransformNode;
   private stabNode: TransformNode;
   private capNode: TransformNode;
-  private foams: Record<string, Mesh> = {};
+  private switchNode: TransformNode;
+  private foams: Record<string, Mesh | null> = { silicone: null, caseFoam: null, peFoam: null, plateFoam: null };
+  private foamOn: string[] = [];
   private plateMesh: Mesh | null = null;
-  private housings: Mesh;
-  private stems: Mesh;
-  private housingMat: StandardMaterial;
-  private stemMat: StandardMaterial;
+  private plateDef: PlateDef | null = null;
+  private pcbDef: PcbDef | null = null;
+  private caseDef: CaseMaterialDef | null = null;
+  private caseHex: string | null = null;
+  private stabDef: StabDef | null = null;
+  private stabLubed = false;
+  private sw: SwitchProduct | null = null;
+  private swMeshes: Mesh[] = [];
   private switchIn: number[];
   private switchTarget: number[];
   private caps: (Mesh | null)[];
-  private capRest: number[];
+  private capSet: KeycapSet | null = null;
   private capIn: number[];
   private capTarget: number[];
   private press: number[];
@@ -84,282 +128,491 @@ export class Board {
     private shadows?: ShadowGenerator | null,
   ) {
     this.layout = getLayout(layoutId);
-    const L = this.layout;
-    const n = L.keys.length;
+    const n = this.layout.keys.length;
+    this.base = new TransformNode("board-base", scene);
     this.root = new TransformNode("board", scene);
+    this.root.parent = this.base;
     this.root.scaling.setAll(U);
+    this.mmNode = new TransformNode("board-mm", scene);
+    this.mmNode.parent = this.root;
+    this.mmNode.scaling.setAll(MM_U);
     const child = (name: string) => {
       const t = new TransformNode(name, scene);
-      t.parent = this.root;
+      t.parent = this.mmNode;
       return t;
     };
     this.caseNode = child("case");
     this.pcbNode = child("pcb");
     this.tapeNode = new TransformNode("tape", scene);
     this.tapeNode.parent = this.pcbNode;
+    this.tapeNode.scaling.setAll(PITCH);
     this.stabNode = child("stabs");
+    this.switchNode = child("switches");
     this.capNode = child("caps");
-
-    const slab = (key: string, w: number, h: number, d: number, color: string, y: number, alpha = 1) => {
-      const m = roundedBox(`foam-${key}`, { w, h, d, r: Math.min(0.05, h / 2.2), seg: 2 }, scene);
-      m.material = this.mat(`foam-${key}`, color, { spec: 0.02, alpha });
-      m.parent = this.root;
-      m.position.y = y;
-      m.setEnabled(false);
-      m.receiveShadows = true;
-      this.foams[key] = m;
-    };
-    slab("silicone", L.width - 0.2, 0.08, L.depth - 0.2, "#eef2f5", Y.silicone, 0.85);
-    slab("caseFoam", L.width - 0.15, 0.22, L.depth - 0.15, "#3d4148", Y.caseFoam);
-    slab("peFoam", L.width, 0.02, L.depth, "#fafafa", Y.peFoam);
-    const pf = this.platePoly(0.12, "plateFoam");
-    pf.material = this.mat("plateFoam", "#d8d1bd", { spec: 0.02 });
-    pf.position.y = Y.plateFoam;
-    pf.setEnabled(false);
-    this.foams.plateFoam = pf;
-
-    // Switches: two thin-instanced meshes (housing + stem)
-    this.housingMat = this.mat("housing", "#222222", { spec: 0.3 });
-    this.stemMat = this.mat("stem", "#e23b3b", { spec: 0.3 });
-    this.housings = roundedBox("housings", { w: 0.74, h: 0.26, d: 0.74, r: 0.06, seg: 2 }, scene);
-    this.housings.material = this.housingMat;
-    this.housings.parent = this.root;
-    const stemA = MeshBuilder.CreateBox("stemA", { width: 0.3, height: 0.2, depth: 0.09 }, scene);
-    const stemB = MeshBuilder.CreateBox("stemB", { width: 0.09, height: 0.2, depth: 0.3 }, scene);
-    this.stems = Mesh.MergeMeshes([stemA, stemB], true)!;
-    this.stems.name = "stems";
-    this.stems.material = this.stemMat;
-    this.stems.parent = this.root;
-    const zeros = new Float32Array(16 * n);
-    this.housings.thinInstanceSetBuffer("matrix", zeros.slice(), 16, false);
-    this.stems.thinInstanceSetBuffer("matrix", zeros.slice(), 16, false);
-    this.housings.isPickable = this.stems.isPickable = false;
-    shadows?.addShadowCaster(this.housings);
     this.switchIn = new Array(n).fill(0);
     this.switchTarget = new Array(n).fill(0);
-
     this.caps = new Array(n).fill(null);
-    this.capRest = new Array(n).fill(0);
     this.capIn = new Array(n).fill(0);
     this.capTarget = new Array(n).fill(0);
     this.press = new Array(n).fill(0);
-
-    // Markers: one thin-instanced disc per color
     this.markerOf = new Array(n).fill(null);
+
+    const zeros = new Float32Array(16 * n);
     for (const [key, hex] of [["green", "#3ecf6e"], ["red", "#e23b4e"], ["orange", "#ff9f1c"], ["yellow", "#ffd24a"]] as const) {
-      const m = MeshBuilder.CreateDisc(`marker-${key}`, { radius: 0.17, tessellation: 20 }, scene);
+      const m = MeshBuilder.CreateDisc(`marker-${key}`, { radius: 4.2, tessellation: 24 }, scene);
       m.rotation.x = Math.PI / 2;
       m.bakeCurrentTransformIntoVertices();
-      const mat = this.mat(`marker-${key}`, hex, { emissive: true });
+      const mat = this.pbr(`marker-${key}`, hex, { rough: 0.6 });
+      mat.emissiveColor = Color3.FromHexString(hex);
+      mat.unlit = true;
       m.material = mat;
-      m.parent = this.root;
+      m.parent = this.mmNode;
       m.isPickable = false;
       m.thinInstanceSetBuffer("matrix", zeros.slice(), 16, false);
       this.markerMeshes[key] = m;
     }
-    // Invisible hit boxes for picking keys
     this.hit = MeshBuilder.CreateBox("keyhit", { size: 1 }, scene);
-    this.hit.parent = this.root;
+    this.hit.parent = this.mmNode;
     this.hit.visibility = 0;
     this.hit.thinInstanceEnablePicking = true;
-    const hm = new Float32Array(16 * n);
-    L.keys.forEach((k, i) => {
-      const [x, z] = this.keyXZ(k);
-      Matrix.Compose(new Vector3(k.w - 0.05, 0.8, k.h - 0.05), Quaternion.Identity(), new Vector3(x, Y.capBase, z)).copyToArray(hm, i * 16);
-    });
-    this.hit.thinInstanceSetBuffer("matrix", hm, 16, true);
-    this.refreshSwitches();
+    this.refreshHit();
+    this.applyPlacement();
     this.refreshMarkers();
   }
 
-  private mat(name: string, hex: string, o: { spec?: number; alpha?: number; emissive?: boolean; texture?: Texture } = {}): StandardMaterial {
-    const m = new StandardMaterial(`kb-${name}`, this.scene);
-    m.diffuseColor = Color3.FromHexString(hex);
-    const sp = o.spec ?? 0.15;
-    m.specularColor = new Color3(sp, sp, sp);
-    m.specularPower = 48;
+  // ---------------------------------------------------------------- helpers
+  private pbr(name: string, hex: string, o: { metal?: number; rough?: number; alpha?: number; tex?: Texture } = {}): PBRMaterial {
+    const m = new PBRMaterial(`kb-${name}`, this.scene);
+    m.albedoColor = Color3.FromHexString(hex).toLinearSpace();
+    m.metallic = o.metal ?? 0;
+    m.roughness = o.rough ?? 0.5;
     if (o.alpha !== undefined && o.alpha < 1) {
       m.alpha = o.alpha;
+      m.transparencyMode = PBRMaterial.PBRMATERIAL_ALPHABLEND;
+      m.backFaceCulling = false;
     }
-    if (o.emissive) {
-      m.emissiveColor = Color3.FromHexString(hex);
-      m.disableLighting = true;
+    if (o.tex) {
+      m.albedoTexture = o.tex;
     }
-    if (o.texture) m.diffuseTexture = o.texture;
     this.owned.push(m);
     return m;
   }
 
+  private meshFrom(name: string, vd: VertexData, parent: TransformNode, mat: PBRMaterial, shadow = true): Mesh {
+    const m = new Mesh(name, this.scene);
+    vd.applyToMesh(m);
+    m.parent = parent;
+    m.material = mat;
+    m.receiveShadows = true;
+    m.isPickable = false;
+    if (shadow && (mat.alpha ?? 1) >= 1) this.shadows?.addShadowCaster(m);
+    return m;
+  }
+
+  private get stack() {
+    return stackOf(this.family);
+  }
+  private get style(): CaseStyle {
+    return CASE_STYLE[this.caseDef?.id ?? "plastic"];
+  }
+  private get geo() {
+    return FAMILY_GEO[this.family];
+  }
+  private get W() {
+    return this.layout.width * PITCH;
+  }
+  private get D() {
+    return this.layout.depth * PITCH;
+  }
+  private get bezel() {
+    return this.caseDef ? this.style.bezel : 2;
+  }
+
+  /** Key center in cap space (x right, y away from the typist), mm. */
+  private keyCap(k: KeyGeom): Pt {
+    return [(k.x + k.w / 2) * PITCH - this.W / 2, -((k.y + k.h / 2) * PITCH - this.D / 2)];
+  }
+  /** Key center in Babylon board space (U), kept for the minigames. */
   keyXZ(k: KeyGeom): [number, number] {
-    // Viewer stands at +z looking toward -z (Babylon is left-handed, so +x is on the viewer's left):
-    // the number row is far (-z), the spacebar row near (+z), Esc on the viewer's left (+x).
     return [-(k.x + k.w / 2 - this.layout.width / 2), k.y + k.h / 2 - this.layout.depth / 2];
   }
   get outerWidth() {
-    return (this.layout.width + BEZEL * 2) * U;
+    return (this.W + 2 * this.bezel) / 1000;
   }
   get outerDepth() {
-    return (this.layout.depth + BEZEL * 2) * U;
+    return (this.D + 2 * this.bezel) / 1000;
   }
 
-  private platePoly(thickness: number, name: string): Mesh {
-    const L = this.layout;
-    const W = L.width / 2 + 0.05;
-    const D = L.depth / 2 + 0.05;
-    const shape = [new Vector3(-W, 0, -D), new Vector3(W, 0, -D), new Vector3(W, 0, D), new Vector3(-W, 0, D)];
-    const s = 0.37;
-    const holes = L.keys.map((k) => {
-      const [x, z] = this.keyXZ(k);
-      return [new Vector3(x - s, 0, z - s), new Vector3(x + s, 0, z - s), new Vector3(x + s, 0, z + s), new Vector3(x - s, 0, z + s)];
-    });
-    const m = MeshBuilder.CreatePolygon(name, { shape, holes, depth: thickness, sideOrientation: Mesh.DOUBLESIDE }, this.scene, earcut);
-    m.parent = this.root;
-    m.receiveShadows = true;
-    this.owned.push(m);
-    return m;
+  // ---------------------------------------------------------------- placement (typing angle)
+  private tiltDeg() {
+    return this.caseDef ? Math.max(1.5, this.style.tilt + this.stack.tiltAdj) : 0;
+  }
+  /** Desk plane in tilted cap space: z = zb(y). The case's front bottom edge touches the desk. */
+  private deskPlane() {
+    const a = (this.tiltDeg() * Math.PI) / 180;
+    const Do = this.D + 2 * this.bezel;
+    const zFront = this.stack.floor - 3;
+    const c = zFront * Math.cos(a) + (-Do / 2) * Math.sin(a);
+    return { a, c, zb: (y: number) => (c - y * Math.sin(a)) / Math.cos(a) };
+  }
+  private applyPlacement() {
+    const { a, c } = this.deskPlane();
+    this.root.rotation.x = a;
+    this.root.position.y = -c / 1000;
   }
 
-  // ---------- Case ----------
+  // ---------------------------------------------------------------- family (MX / Box / Choc footprint)
+  setFamily(f: SwitchFamily) {
+    if (f === this.family) return;
+    this.family = f;
+    this.rebuildAll();
+  }
+
+  private rebuildAll() {
+    this.buildCase(false);
+    this.buildFoams();
+    this.buildPcb(false);
+    this.buildPlate(false);
+    this.buildStabs(false);
+    this.buildSwitchMeshes();
+    if (this.capSet) this.setKeycaps(this.capSet);
+    this.refreshHit();
+    this.applyPlacement();
+  }
+
+  // ---------------------------------------------------------------- case
   setCase(def: CaseMaterialDef | null, hex: string | null, animate = true) {
-    this.caseNode.getChildMeshes().forEach((m) => m.dispose());
+    this.caseDef = def && hex ? def : null;
+    this.caseHex = hex;
+    this.buildCase(animate);
+    this.buildFoams();
+    this.refreshHit();
+    this.applyPlacement();
+  }
+
+  private buildCase(animate: boolean) {
+    this.caseNode.getChildMeshes().forEach((m) => {
+      this.shadows?.removeShadowCaster(m);
+      m.dispose();
+    });
+    const def = this.caseDef;
+    const hex = this.caseHex;
     if (!def || !hex) return;
-    const W = this.layout.width + BEZEL * 2;
-    const D = this.layout.depth + BEZEL * 2;
-    const wallH = Y.wallTop + 0.35;
-    const m = this.mat(`case-${def.id}`, hex, { spec: def.look.metalness > 0.5 ? 0.6 : 0.12, alpha: def.look.opacity });
-    if (def.look.metalness > 0.5) m.specularPower = 90;
-    if (def.id === "wood") {
-      m.diffuseTexture = this.woodTex(hex);
-      m.diffuseColor = Color3.White();
+    const st = this.style;
+    const S = this.stack;
+    const W = this.W, D = this.D;
+    const Wo = W + 2 * st.bezel, Do = D + 2 * st.bezel;
+    const R = st.radius;
+    const zt = st.wallTop + S.wallAdj;
+    const zf = S.floor;
+    const { zb } = this.deskPlane();
+    const g = new Geo();
+    const P = 7;
+    const out = (inset: number, z: number | ((x: number, y: number) => number)) => g.ring(rrect(Wo - 2 * inset, Do - 2 * inset, Math.max(0.3, R - inset), P), z);
+    const eb = 0.8; // bottom edge round-over
+    // bottom face + outer wall
+    const bottom = out(eb, (_x, y) => zb(y));
+    g.fan(out(eb, (_x, y) => zb(y)), false);
+    const r1 = out(0, (_x, y) => zb(y) + eb);
+    g.bridge(bottom, r1);
+    const es = st.edgeSize;
+    let top: number[];
+    if (st.edge === "fillet") {
+      let prev = r1;
+      const r2 = out(0, zt - es);
+      g.bridge(prev, r2);
+      prev = r2;
+      for (let k = 1; k <= 5; k++) {
+        const th = (k / 5) * (Math.PI / 2);
+        const ring = out(es * (1 - Math.cos(th)), zt - es + es * Math.sin(th));
+        g.bridge(prev, ring);
+        prev = ring;
+      }
+      top = out(es, zt); // duplicate ring: hard edge into the flat rim
+    } else {
+      const r2 = out(0, zt - es);
+      g.bridge(r1, r2);
+      const c0 = out(0, zt - es);
+      const c1 = out(es, zt);
+      g.bridge(c0, c1);
+      top = out(es, zt);
     }
-    if (def.look.opacity !== undefined) m.backFaceCulling = false;
-    const add = (w: number, h: number, d: number, x: number, y: number, z: number) => {
-      const b = roundedBox("casepart", { w, h, d, r: 0.16, seg: 3 }, this.scene);
-      b.material = m;
-      b.parent = this.caseNode;
-      b.position.set(x, y, z);
-      b.receiveShadows = true;
-      if (def.look.opacity === undefined) this.shadows?.addShadowCaster(b);
-    };
-    add(W, 0.35, D, 0, -0.175, 0);
-    const cy = -0.35 + wallH / 2;
-    add(W, wallH, BEZEL, 0, cy, -D / 2 + BEZEL / 2);
-    add(W, wallH, BEZEL, 0, cy, D / 2 - BEZEL / 2);
-    add(BEZEL, wallH, D - BEZEL * 2 + 0.3, -W / 2 + BEZEL / 2, cy, 0);
-    add(BEZEL, wallH, D - BEZEL * 2 + 0.3, W / 2 - BEZEL / 2, cy, 0);
-    const footMat = this.mat("foot", "#1a1a1a", { spec: 0.05 });
-    for (const [fx, fz] of [[-W / 2 + 1, -D / 2 + 0.8], [W / 2 - 1, -D / 2 + 0.8], [-W / 2 + 1, D / 2 - 0.8], [W / 2 - 1, D / 2 - 0.8]]) {
-      const f = MeshBuilder.CreateCylinder("foot", { diameter: 0.6, height: 0.1, tessellation: 16 }, this.scene);
-      f.material = footMat;
-      f.parent = this.caseNode;
-      f.position.set(fx, -0.4, fz);
+    // top rim → inner opening (plate outline + clearance)
+    const inner = (z: number) => g.ring(rrect(W + 1.2, D + 1.2, 1.0, P), z);
+    const innerTop = inner(zt);
+    g.bridge(top, innerTop);
+    const iw0 = inner(zt);
+    const iw1 = inner(zf);
+    g.bridge(iw1, iw0, true);
+    g.fan(inner(zf), true);
+    const vd = g.toVertexData("box", st.texture === "layers" ? 1 / 3 : 1 / 60);
+    let tex: Texture | undefined;
+    if (st.texture === "wood") tex = this.woodTexture();
+    if (st.texture === "layers") tex = this.layerTexture();
+    const color = st.texture === "wood" ? Color3.FromHexString(hex).scale(1.25).toHexString() : hex;
+    const mat = this.pbr(`case-${def.id}`, color, { metal: st.metal, rough: st.rough, alpha: st.alpha, tex });
+    if (st.metal > 0.5) {
+      mat.metallicF0Factor = 0.9;
     }
+    if (def.id === "polycarbonate" || def.id === "acrylic") {
+      mat.subSurface.isTranslucencyEnabled = false;
+      mat.indexOfRefraction = 1.5;
+    }
+    const m = this.meshFrom("case", vd, this.caseNode, mat, !st.alpha);
+    m.alphaIndex = 10;
+    // USB-C port on the back wall
+    const port = new Geo();
+    port.box(0, Do / 2 - 0.6, S.pcbTop - S.pcbT - 3.4, 9, 1.6, 3.4);
+    this.meshFrom("usb", port.toVertexData(), this.caseNode, this.pbr("usb", "#1a1a1c", { rough: 0.4, metal: 0.6 }), false);
     if (animate) this.drop(this.caseNode, 0);
   }
 
-  private woodTex(hex: string): DynamicTexture {
-    const t = new DynamicTexture("wood", { width: 512, height: 128 }, this.scene, true);
+  private woodTexture(): DynamicTexture {
+    const t = new DynamicTexture("wood", { width: 1024, height: 256 }, this.scene, true);
     const g = t.getContext() as unknown as CanvasRenderingContext2D;
-    g.fillStyle = hex;
-    g.fillRect(0, 0, 512, 128);
-    for (let i = 0; i < 60; i++) {
-      g.strokeStyle = `rgba(40,20,5,${0.1 + Math.random() * 0.2})`;
-      g.lineWidth = 0.6 + Math.random() * 2;
+    g.fillStyle = "#b89268";
+    g.fillRect(0, 0, 1024, 256);
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    for (let i = 0; i < 140; i++) {
+      const y = rnd() * 256;
+      g.strokeStyle = `rgba(70,40,15,${0.08 + rnd() * 0.22})`;
+      g.lineWidth = 0.5 + rnd() * 2.2;
       g.beginPath();
-      const y = Math.random() * 128;
-      for (let x = 0; x <= 512; x += 16) g.lineTo(x, y + Math.sin(x / 60 + i) * 3);
+      for (let x = 0; x <= 1024; x += 16) g.lineTo(x, y + Math.sin(x / 140 + i) * 4 + Math.sin(x / 37 + i * 3) * 1.2);
       g.stroke();
     }
     t.update();
+    t.wrapU = t.wrapV = Texture.WRAP_ADDRESSMODE;
     this.owned.push(t);
     return t;
   }
 
-  // ---------- Dampening ----------
+  private layerTexture(): DynamicTexture {
+    const t = new DynamicTexture("layers", { width: 8, height: 64 }, this.scene, true);
+    const g = t.getContext() as unknown as CanvasRenderingContext2D;
+    g.fillStyle = "#ffffff";
+    g.fillRect(0, 0, 8, 64);
+    g.fillStyle = "rgba(0,0,0,0.35)";
+    g.fillRect(0, 0, 8, 3);
+    t.update();
+    t.wrapU = t.wrapV = Texture.WRAP_ADDRESSMODE;
+    this.owned.push(t);
+    return t;
+  }
+
+  // ---------------------------------------------------------------- foams
   setDampening(ids: string[], animate = true) {
-    for (const [key, m] of Object.entries(this.foams)) {
-      const on = ids.includes(key);
-      if (on && !m.isEnabled() && animate) this.drop(m, m.position.y);
-      m.setEnabled(on);
+    const added = ids.filter((i) => !this.foamOn.includes(i));
+    this.foamOn = [...ids];
+    this.buildFoams();
+    if (animate) for (const id of added) if (this.foams[id]) this.drop(this.foams[id]!, this.foams[id]!.position.y);
+  }
+
+  private buildFoams() {
+    for (const k of Object.keys(this.foams)) {
+      this.foams[k]?.dispose();
+      this.foams[k] = null;
+    }
+    const S = this.stack;
+    const W = this.W, D = this.D;
+    const on = (k: string) => this.foamOn.includes(k);
+    let z = S.floor;
+    if (on("silicone")) {
+      const g = new Geo();
+      g.prism(rrect(W - 1, D - 1, 1, 4), z, z + 2.5);
+      this.foams.silicone = this.meshFrom("silicone", g.toVertexData(), this.mmNode, this.pbr("silicone", "#eef2f5", { rough: 0.35, alpha: 0.8 }), false);
+      z += 2.5;
+    }
+    if (on("caseFoam")) {
+      const g = new Geo();
+      g.prism(rrect(W - 1, D - 1, 1, 4), z, S.pcbTop - S.pcbT - 0.2);
+      this.foams.caseFoam = this.meshFrom("caseFoam", g.toVertexData(), this.mmNode, this.pbr("caseFoam", "#34373c", { rough: 0.95 }));
+    }
+    if (on("peFoam")) {
+      const m = this.holePlate("peFoam", 0.4, 0.6);
+      m.position.y = S.pcbTop + 0.4;
+      m.material = this.pbr("peFoam", "#fbfbfa", { rough: 0.9 });
+      this.foams.peFoam = m;
+    }
+    if (on("plateFoam")) {
+      const th = -S.plateT - S.pcbTop - (on("peFoam") ? 0.4 : 0) - 0.1;
+      const m = this.holePlate("plateFoam", th, 1.0);
+      m.position.y = -S.plateT - 0.05;
+      m.material = this.pbr("plateFoam", "#e6d6ae", { rough: 0.95 });
+      this.foams.plateFoam = m;
     }
   }
 
-  // ---------- PCB ----------
-  setPcb(def: PcbDef | null, animate = true) {
-    this.pcbNode.getChildMeshes(true).forEach((m) => m !== this.tapeNode && m.dispose());
-    if (!def) return;
-    const L = this.layout;
-    const top = MeshBuilder.CreatePlane("pcbTop", { width: L.width, height: L.depth }, this.scene);
-    top.rotation.x = Math.PI / 2;
-    top.scaling = new Vector3(-1, -1, 1); // rotate the texture 180° in-plane to match key positions
-    top.position.y = 0.041;
-    top.material = this.mat("pcbTop", "#ffffff", { texture: this.pcbTexture(def, "top"), spec: 0.2 });
-    const bottom = MeshBuilder.CreatePlane("pcbBot", { width: L.width, height: L.depth }, this.scene);
-    bottom.rotation.x = -Math.PI / 2;
-    bottom.position.y = -0.041;
-    bottom.material = this.mat("pcbBot", "#ffffff", { texture: this.pcbTexture(def, "bottom"), spec: 0.2 });
-    const body = MeshBuilder.CreateBox("pcbBody", { width: L.width, height: 0.08, depth: L.depth }, this.scene);
-    body.material = this.mat("pcbSide", def.color, { spec: 0.1 });
-    for (const m of [top, bottom, body]) {
-      m.parent = this.pcbNode;
-      m.receiveShadows = true;
+  /**
+   * A sheet with switch (and stabilizer) cutouts, top at y = 0, in Babylon mm space.
+   * grow: extra clearance around cutouts.
+   */
+  private holePlate(name: string, thickness: number, grow = 0, withStabs = true): Mesh {
+    const W = this.W / 2 + 0.2;
+    const D = this.D / 2 + 0.2;
+    const c = this.geo.cutout / 2 + grow / 2;
+    const shape = [new Vector3(-W, 0, -D), new Vector3(W, 0, -D), new Vector3(W, 0, D), new Vector3(-W, 0, D)];
+    const rect = (x: number, z: number, hw: number, hd: number) => [new Vector3(x - hw, 0, z - hd), new Vector3(x + hw, 0, z - hd), new Vector3(x + hw, 0, z + hd), new Vector3(x - hw, 0, z + hd)];
+    const holes: Vector3[][] = [];
+    for (const k of this.layout.keys) {
+      const [cx, cy] = this.keyCap(k);
+      const X = -cx, Z = -cy;
+      holes.push(rect(X, Z, c, c));
+      if (withStabs && needsStab(k)) {
+        const off = Math.max(k.w, k.h) >= 6 ? 50 : 11.9;
+        const vertical = k.h > k.w;
+        for (const s of [-1, 1]) {
+          if (vertical) holes.push(rect(X, Z + s * off, 7 + grow / 2, 3.375 + grow / 2));
+          else holes.push(rect(X + s * off, Z - 0.5, 3.375 + grow / 2, 7 + grow / 2));
+        }
+      }
     }
-    this.pcbNode.position.y = Y.pcb;
-    if (animate) this.drop(this.pcbNode, Y.pcb);
+    const m = MeshBuilder.CreatePolygon(name, { shape, holes, depth: thickness }, this.scene, earcut);
+    m.parent = this.mmNode;
+    m.receiveShadows = true;
+    m.isPickable = false;
+    return m;
+  }
+
+  // ---------------------------------------------------------------- PCB
+  setPcb(def: PcbDef | null, animate = true) {
+    this.pcbDef = def;
+    this.buildPcb(animate);
+  }
+
+  private buildPcb(animate: boolean) {
+    this.pcbNode.getChildMeshes(true).forEach((m) => m.dispose());
+    const def = this.pcbDef;
+    if (!def) return;
+    const S = this.stack;
+    const W = this.W, D = this.D;
+    const mk = (name: string, side: "top" | "bottom", y: number) => {
+      const p = MeshBuilder.CreateGround(name, { width: W, height: D }, this.scene);
+      const tex = this.pcbTexture(def, side);
+      const mat = this.pbr(name, "#ffffff", { rough: 0.42, tex });
+      mat.albedoColor = Color3.White();
+      p.material = mat;
+      p.parent = this.pcbNode;
+      p.position.y = y;
+      p.receiveShadows = true;
+      p.isPickable = false;
+      if (side === "bottom") p.rotation.z = Math.PI; // face down, keep x mirrored
+      return p;
+    };
+    mk("pcbTop", "top", 0.01);
+    mk("pcbBot", "bottom", -S.pcbT - 0.01);
+    const body = new Geo();
+    body.box(0, 0, -S.pcbT, W - 0.05, D - 0.05, S.pcbT - 0.02);
+    this.meshFrom("pcbBody", body.toVertexData(), this.pcbNode, this.pbr("pcbSide", def.color, { rough: 0.5 }));
+    this.pcbNode.position.y = S.pcbTop;
+    this.tapeNode.position.y = -S.pcbT + 0.9;
+    if (animate) this.drop(this.pcbNode, S.pcbTop);
   }
 
   private pcbTexture(def: PcbDef, side: "top" | "bottom"): DynamicTexture {
     const L = this.layout;
-    const ppu = 40;
-    const w = Math.ceil(L.width * ppu);
-    const h = Math.ceil(L.depth * ppu);
+    const ppm = 4; // px per mm
+    const w = Math.ceil(this.W * ppm);
+    const h = Math.ceil(this.D * ppm);
     const t = new DynamicTexture(`pcb-${side}`, { width: w, height: h }, this.scene, true);
     const g = t.getContext() as unknown as CanvasRenderingContext2D;
+    // The ground's +x is the typist's left: draw mirrored so the artwork reads left → right.
+    g.save();
+    if (side === "top") {
+      g.translate(w, 0);
+      g.scale(-1, 1);
+    }
     g.fillStyle = def.color;
     g.fillRect(0, 0, w, h);
-    g.strokeStyle = "rgba(255,255,255,0.08)";
-    g.lineWidth = 2;
-    for (let i = 0; i < 40; i++) {
+    let seed = 11;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    const trace = Color3.FromHexString(def.color).scale(1.35).toHexString();
+    g.strokeStyle = trace;
+    g.lineWidth = 1.2;
+    for (let i = 0; i < 90; i++) {
+      let x = rnd() * w, y = rnd() * h;
       g.beginPath();
-      const y = Math.random() * h;
-      g.moveTo(0, y);
-      g.lineTo(w * (0.3 + Math.random() * 0.7), y + (Math.random() - 0.5) * 30);
+      g.moveTo(x, y);
+      for (let s = 0; s < 4; s++) {
+        if (rnd() < 0.5) x += (rnd() - 0.5) * 160;
+        else y += (rnd() - 0.5) * 50;
+        g.lineTo(x, y);
+      }
       g.stroke();
     }
+    const choc = this.family === "choc";
     for (const k of L.keys) {
-      const cx = (k.x + k.w / 2) * ppu;
-      const cy = (k.y + k.h / 2) * ppu;
+      const cx = (k.x + k.w / 2) * PITCH * ppm;
+      const cy = (k.y + k.h / 2) * PITCH * ppm;
+      const mmx = (v: number) => cx + v * ppm;
+      const mmy = (v: number) => cy + v * ppm;
       if (side === "top") {
-        g.fillStyle = "#d9b458";
+        g.strokeStyle = "rgba(240,240,240,0.85)";
+        g.lineWidth = 1;
+        g.strokeRect(mmx(-7), mmy(-7), 14 * ppm, 14 * ppm);
+        g.fillStyle = "#0d1a12";
         g.beginPath();
-        g.arc(cx - 0.2 * ppu, cy - 0.13 * ppu, 3.5, 0, Math.PI * 2);
-        g.arc(cx + 0.13 * ppu, cy - 0.26 * ppu, 3.5, 0, Math.PI * 2);
+        g.arc(mmx(0), mmy(0), (choc ? 1.7 : 2.0) * ppm, 0, Math.PI * 2);
         g.fill();
-        g.fillStyle = "rgba(0,0,0,0.55)";
-        g.beginPath();
-        g.arc(cx, cy, 5, 0, Math.PI * 2);
-        g.fill();
+        const pins: Pt[] = choc ? [[0, -5.9], [5, -3.8]] : [[-3.81, -2.54], [2.54, -5.08]];
+        for (const [px, py] of pins) {
+          g.fillStyle = "#d9b458";
+          g.beginPath();
+          g.arc(mmx(px), mmy(py), 1.25 * ppm, 0, Math.PI * 2);
+          g.fill();
+          g.fillStyle = "#111";
+          g.beginPath();
+          g.arc(mmx(px), mmy(py), 0.7 * ppm, 0, Math.PI * 2);
+          g.fill();
+        }
+        if (!choc)
+          for (const px of [-5.08, 5.08]) {
+            g.fillStyle = "#0d1a12";
+            g.beginPath();
+            g.arc(mmx(px), mmy(0), 0.9 * ppm, 0, Math.PI * 2);
+            g.fill();
+          }
         if (def.rgb) {
           g.fillStyle = "#f4f4f4";
-          g.fillRect(cx - 4, cy + 0.25 * ppu, 8, 5);
+          g.fillRect(mmx(-1.6), mmy(4.2), 3.2 * ppm, 2.4 * ppm);
         }
       } else {
+        // back side: hot-swap sockets + diodes (mirror x because we look from below)
+        const bx = (v: number) => cx - v * ppm;
         if (def.hotswap) {
-          g.fillStyle = "#151515";
-          g.fillRect(cx - 0.28 * ppu, cy - 0.3 * ppu, 0.52 * ppu, 0.24 * ppu);
+          g.fillStyle = "#141414";
+          g.fillRect(bx(2.6), mmy(-6.6), 9.5 * ppm, 4.6 * ppm);
+          g.fillStyle = "#c9a550";
+          g.fillRect(bx(-4.6), mmy(-5.4), 1.6 * ppm, 2.2 * ppm);
+          g.fillRect(bx(7.4), mmy(-7.4), 1.6 * ppm, 2.2 * ppm);
+        } else {
+          g.fillStyle = "#d9b458";
+          for (const [px, py] of [[-3.81, -2.54], [2.54, -5.08]]) {
+            g.beginPath();
+            g.arc(bx(px), mmy(py), 1.3 * ppm, 0, Math.PI * 2);
+            g.fill();
+          }
         }
-        g.fillStyle = "#d9b458";
-        g.fillRect(cx - 0.36 * ppu, cy - 0.28 * ppu, 4, 6);
-        g.fillRect(cx + 0.28 * ppu, cy - 0.28 * ppu, 4, 6);
+        g.fillStyle = "#1b1b1b";
+        g.fillRect(bx(6.5), mmy(2.5), 1.6 * ppm, 3.4 * ppm);
       }
     }
     if (def.flex && side === "top") {
-      g.fillStyle = "rgba(0,0,0,0.6)";
-      for (let x = 3; x < L.width - 2; x += 4) g.fillRect(x * ppu, 0.4 * ppu, 0.12 * ppu, (L.depth - 0.8) * ppu);
+      g.fillStyle = "rgba(0,0,0,0.55)";
+      for (let x = 3; x < L.width - 2; x += 4) g.fillRect(x * PITCH * ppm, 6 * ppm, 0.8 * ppm, (this.D - 12) * ppm);
     }
-    g.fillStyle = "rgba(255,255,255,0.75)";
-    g.font = "bold 14px monospace";
-    g.fillText(side === "top" ? "MKSS-PCB rev.3  ♥ thock responsibly" : "DO NOT LICK", 8, h - 8);
+    g.restore();
+    g.save();
+    g.fillStyle = "rgba(245,245,245,0.85)";
+    g.font = `600 ${Math.round(3 * ppm)}px monospace`;
+    const text = side === "top" ? `MKSS-${L.id.toUpperCase()} ${this.family.toUpperCase()} rev.4` : "thock responsibly";
+    if (side === "top") {
+      g.translate(w, 0);
+      g.scale(-1, 1);
+    }
+    g.fillText(text, 6 * ppm, h - 2 * ppm);
+    g.restore();
     t.update();
     this.owned.push(t);
     return t;
@@ -368,18 +621,20 @@ export class Board {
   /** Flip the PCB upside-down (tape mod) or back. */
   flipPcb(flipped: boolean, done?: () => void) {
     const n = this.pcbNode;
-    this.tweens.push({ node: n, prop: "y", from: n.position.y, to: flipped ? Y.pcb + 2.4 : Y.pcb, t: 0, dur: 0.45 });
+    const y0 = this.stack.pcbTop;
+    this.tweens.push({ node: n, prop: "y", from: n.position.y, to: flipped ? y0 + 45 : y0, t: 0, dur: 0.45 });
     this.tweens.push({ node: n, prop: "rotX", from: n.rotation.x, to: flipped ? Math.PI : 0, t: 0, dur: 0.6, done });
   }
 
-  /** Points on top of the case bezel where screws go (board units), n = 6 or 8. */
+  /** Points on top of the case rim where screws go (key units, root space), n = 6 or 8. */
   screwPoints(n: number): Vector3[] {
-    const W = this.layout.width + BEZEL * 2;
-    const D = this.layout.depth + BEZEL * 2;
-    const y = Y.wallTop + 0.36 - 0.35 + 0.01;
+    const st = this.style;
+    const Wo = this.W + 2 * st.bezel;
+    const Do = this.D + 2 * st.bezel;
+    const y = (st.wallTop + this.stack.wallAdj) * MM_U;
     const xs = n === 8 ? [-0.42, -0.14, 0.14, 0.42] : [-0.4, 0, 0.4];
     const pts: Vector3[] = [];
-    for (const zs of [-1, 1]) for (const fx of xs) pts.push(new Vector3(fx * W, y, zs * (D / 2 - BEZEL / 2)));
+    for (const zs of [-1, 1]) for (const fx of xs) pts.push(new Vector3(fx * Wo * MM_U, y, zs * (Do / 2 - st.bezel / 2) * MM_U));
     return pts;
   }
 
@@ -387,69 +642,155 @@ export class Board {
     this.tapeNode.getChildMeshes().forEach((m) => m.dispose());
     const L = this.layout;
     const rows = Math.ceil(L.depth);
-    const mat = this.mat("tape", "#cfe3ff", { alpha: 0.88, spec: 0.5 });
-    mat.backFaceCulling = false;
+    const mat = this.pbr("tape", "#cfe3ff", { alpha: 0.9, rough: 0.35 });
     for (const s of strips) {
       const from = s.from ?? 0;
       const to = s.to ?? 1;
       const w = (L.width - 0.2) * (to - from);
-      const m = MeshBuilder.CreatePlane("tapeStrip", { width: w, height: 0.8 / Math.max(1, rows / 6) }, this.scene);
+      const m = MeshBuilder.CreatePlane("tapeStrip", { width: w, height: 0.8 / Math.max(1, rows / 6), sideOrientation: Mesh.DOUBLESIDE }, this.scene);
       m.material = mat;
       m.parent = this.tapeNode;
       m.rotation.x = -Math.PI / 2;
       m.rotation.y = s.offset * 0.05;
-      const cx = -(L.width - 0.2) / 2 + (L.width - 0.2) * (from + to) / 2;
+      const cx = -(L.width - 0.2) / 2 + ((L.width - 0.2) * (from + to)) / 2;
       m.position.set(cx, -0.05, -((s.row + 0.5) * (L.depth / rows) - L.depth / 2) + s.offset * 0.2);
     }
   }
 
-  // ---------- Plate ----------
+  // ---------------------------------------------------------------- plate
   setPlate(def: PlateDef | null, animate = true) {
+    this.plateDef = def;
+    this.buildPlate(animate);
+  }
+
+  private buildPlate(animate: boolean) {
+    if (this.plateMesh) this.shadows?.removeShadowCaster(this.plateMesh);
     this.plateMesh?.dispose();
     this.plateMesh = null;
+    const def = this.plateDef;
     if (!def || def.id === "none") return;
-    const m = this.platePoly(0.06, "plate");
-    m.material = this.mat(`plate-${def.id}`, def.color, { spec: def.metalness > 0.5 ? 0.7 : 0.15, alpha: def.id === "pc" ? 0.75 : undefined });
-    m.position.y = Y.plate;
+    const m = this.holePlate("plate", this.stack.plateT);
+    let tex: Texture | undefined;
+    if (def.id === "carbon") tex = this.carbonTexture();
+    m.material = this.pbr(`plate-${def.id}`, def.color, { metal: def.metalness, rough: def.roughness, alpha: def.id === "pc" ? 0.7 : undefined, tex });
     this.shadows?.addShadowCaster(m);
     this.plateMesh = m;
-    if (animate) this.drop(m, Y.plate);
+    if (animate) this.drop(m, 0);
   }
 
-  // ---------- Stabilizers ----------
-  setStabs(def: StabDef | null, lubed = false) {
-    this.stabNode.getChildMeshes().forEach((m) => m.dispose());
-    if (!def) return;
-    const color = def.id === "premium" ? "#f1f1f1" : def.id === "standard" ? "#2a2a2a" : "#8a8a8a";
-    const hMat = this.mat("stabH", color, { spec: 0.2 });
-    const wMat = this.mat("stabW", lubed ? "#e6d27a" : "#c9ccd1", { spec: lubed ? 0.9 : 0.5 });
-    for (const k of this.layout.keys.filter(needsStab)) {
-      const [x, z] = this.keyXZ(k);
-      const vertical = k.h > k.w;
-      const span = vertical ? k.h : k.w;
-      const off = span >= 6 ? 2.5 : 0.6;
-      for (const s of [-off, off]) {
-        const hs = roundedBox("stabH", { w: vertical ? 0.5 : 0.32, h: 0.3, d: vertical ? 0.32 : 0.5, r: 0.05, seg: 2 }, this.scene);
-        hs.material = hMat;
-        hs.parent = this.stabNode;
-        hs.position.set(x + (vertical ? 0 : s), Y.plate + 0.15, z + (vertical ? s : 0));
+  private carbonTexture(): DynamicTexture {
+    const t = new DynamicTexture("carbon", { width: 64, height: 64 }, this.scene, true);
+    const g = t.getContext() as unknown as CanvasRenderingContext2D;
+    for (let y = 0; y < 8; y++)
+      for (let x = 0; x < 8; x++) {
+        const on = (x + y) % 2 === 0;
+        const grd = on ? g.createLinearGradient(x * 8, 0, x * 8 + 8, 0) : g.createLinearGradient(0, y * 8, 0, y * 8 + 8);
+        grd.addColorStop(0, "#2a2a2e");
+        grd.addColorStop(0.5, "#4a4a50");
+        grd.addColorStop(1, "#2a2a2e");
+        g.fillStyle = grd;
+        g.fillRect(x * 8, y * 8, 8, 8);
       }
-      const wire = MeshBuilder.CreateCylinder("stabW", { diameter: 0.05, height: off * 2, tessellation: 8 }, this.scene);
-      wire.material = wMat;
-      wire.parent = this.stabNode;
-      if (vertical) wire.rotation.x = Math.PI / 2;
-      else wire.rotation.z = Math.PI / 2;
-      wire.position.set(x + (vertical ? 0.2 : 0), Y.plate + 0.08, z + (vertical ? 0 : 0.2));
-    }
-    this.drop(this.stabNode, 0);
+    t.update();
+    t.uScale = t.vScale = 40;
+    this.owned.push(t);
+    return t;
   }
 
-  // ---------- Switches ----------
+  // ---------------------------------------------------------------- stabilizers
+  setStabs(def: StabDef | null, lubed = false, animate = true) {
+    this.stabDef = def;
+    this.stabLubed = lubed;
+    this.buildStabs(animate);
+  }
+
+  private buildStabs(animate: boolean) {
+    this.stabNode.getChildMeshes().forEach((m) => m.dispose());
+    const def = this.stabDef;
+    if (!def) return;
+    const S = this.stack;
+    const color = def.id === "premium" ? "#f1f1f1" : def.id === "standard" ? "#2a2a2a" : "#8a8a8a";
+    const hg = new Geo();
+    const wg = new Geo();
+    const sg = new Geo();
+    const hBot = S.pcbTop;
+    const hTop = this.family === "choc" ? 2.2 : 4.6;
+    for (const k of this.layout.keys.filter(needsStab)) {
+      const [x, y] = this.keyCap(k);
+      const off = Math.max(k.w, k.h) >= 6 ? 50 : 11.9;
+      const vertical = k.h > k.w;
+      for (const s of [-1, 1]) {
+        const hx = vertical ? x : x + s * off;
+        const hy = vertical ? y + s * off : y - 0.5;
+        hg.box(hx, hy, hBot, vertical ? 12 : 6.3, vertical ? 6.3 : 12, hTop - hBot);
+        // slider with a cross stem for the keycap
+        sg.box(hx, hy, hTop, 4.2, 4.2, 1.2);
+        sg.box(hx, hy, hTop + 1.2, 4.0, 1.17, 3.0);
+        sg.box(hx, hy, hTop + 1.2, 1.27, 4.0, 3.0);
+      }
+      const wz = S.pcbTop + 1.6;
+      if (vertical) wg.tube([[x + 4, y - off, wz + 3], [x + 6.5, y - off, wz], [x + 6.5, y + off, wz], [x + 4, y + off, wz + 3]], 0.55, 8);
+      else wg.tube([[x - off, y - 4, wz + 3], [x - off, y - 6.5, wz], [x + off, y - 6.5, wz], [x + off, y - 4, wz + 3]], 0.55, 8);
+    }
+    this.meshFrom("stabHousings", hg.toVertexData(), this.stabNode, this.pbr("stabH", color, { rough: 0.45 }));
+    this.meshFrom("stabStems", sg.toVertexData(), this.stabNode, this.pbr("stabS", def.id === "premium" ? "#e6e6e6" : "#f1efe9", { rough: 0.4 }));
+    this.meshFrom("stabWires", wg.toVertexData(), this.stabNode, this.pbr("stabW", this.stabLubed ? "#e3d296" : "#d0d3d8", { metal: 1, rough: this.stabLubed ? 0.12 : 0.28 }));
+    if (animate) this.drop(this.stabNode, 0);
+  }
+
+  // ---------------------------------------------------------------- switches
   setSwitchLook(sw: SwitchProduct | null | undefined) {
+    this.sw = sw ?? null;
+    if (sw && sw.family !== this.family) {
+      this.setFamily(sw.family);
+      return;
+    }
+    this.buildSwitchMeshes();
+  }
+
+  private buildSwitchMeshes() {
+    this.swMeshes.forEach((m) => {
+      this.shadows?.removeShadowCaster(m);
+      m.dispose();
+    });
+    this.swMeshes = [];
+    const sw = this.sw;
     if (!sw) return;
-    this.housingMat.diffuseColor = Color3.FromHexString(sw.housingColor);
-    this.housingMat.alpha = sw.housingOpacity;
-    this.stemMat.diffuseColor = Color3.FromHexString(sw.stemColor);
+    const parts = switchParts(this.family);
+    if (!parts) {
+      whenSwitchModels(() => this.buildSwitchMeshes());
+      return;
+    }
+    const clear = sw.housingOpacity < 1;
+    const mats = {
+      housing: this.pbr("sw-housing", sw.housingColor, { rough: clear ? 0.08 : 0.42, alpha: clear ? Math.max(0.35, sw.housingOpacity) : undefined }),
+      bottom: this.pbr("sw-bottom", sw.bottomColor ?? sw.housingColor, { rough: clear ? 0.1 : 0.45, alpha: clear ? Math.max(0.4, sw.housingOpacity) : undefined }),
+      stem: this.pbr("sw-stem", sw.stemColor, { rough: 0.35 }),
+      spring: this.pbr("sw-spring", "#c9ccd1", { metal: 1, rough: 0.2 }),
+    };
+    const kind = this.family === "choc" && sw.type === "silent" ? "linear" : sw.type;
+    const want: [string, PBRMaterial, boolean][] = [
+      ["top", mats.housing, false],
+      [this.family === "choc" ? "bottom" : "bottom5", mats.bottom, false],
+      [`stem_${kind}`, mats.stem, true],
+    ];
+    if (this.family === "box") want.push(["box", mats.stem, true]);
+    if (clear) want.push(["spring_lo", mats.spring, false]);
+    for (const [name, mat, moves] of want) {
+      const vd = parts[name];
+      if (!vd) continue;
+      const m = new Mesh(`sw-${name}`, this.scene);
+      vd.applyToMesh(m);
+      m.parent = this.switchNode;
+      m.material = mat;
+      m.isPickable = false;
+      m.receiveShadows = true;
+      m.metadata = { moves };
+      m.alphaIndex = 20;
+      if (!clear || moves) this.shadows?.addShadowCaster(m);
+      this.swMeshes.push(m);
+    }
+    this.refreshSwitches();
   }
 
   setSwitchInstalled(i: number, on: boolean, instant = false) {
@@ -469,38 +810,44 @@ export class Board {
   }
 
   private refreshSwitches() {
-    const n = this.layout.keys.length;
-    const hb = new Float32Array(16 * n);
-    const sb = new Float32Array(16 * n);
+    if (!this.swMeshes.length) return;
+    const keys = this.layout.keys;
+    const n = keys.length;
+    const fixed = new Float32Array(16 * n);
+    const moving = new Float32Array(16 * n);
     const q = Quaternion.Identity();
-    this.layout.keys.forEach((k, i) => {
+    const travel = this.geo.travel;
+    keys.forEach((k, i) => {
       const a = this.switchIn[i];
       const s = a <= 0.001 ? 0 : 1;
-      const [x, z] = this.keyXZ(k);
-      const drop = (1 - a) * 1.6;
-      const p = Math.min(1, this.press[i]) * 0.12;
-      Matrix.Compose(new Vector3(s, s, s), q, new Vector3(x, Y.switchTop - 0.13 + drop, z)).copyToArray(hb, i * 16);
-      Matrix.Compose(new Vector3(s, s, s), q, new Vector3(x, Y.switchTop + 0.08 + drop - p, z)).copyToArray(sb, i * 16);
+      const [cx, cy] = this.keyCap(k);
+      const drop = (1 - easeOutCubic(a)) * 30;
+      const p = Math.min(1, this.press[i]) * travel;
+      Matrix.Compose(new Vector3(s, s, s), q, new Vector3(-cx, drop, -cy)).copyToArray(fixed, i * 16);
+      Matrix.Compose(new Vector3(s, s, s), q, new Vector3(-cx, drop - p, -cy)).copyToArray(moving, i * 16);
     });
-    this.housings.thinInstanceSetBuffer("matrix", hb, 16, false);
-    this.stems.thinInstanceSetBuffer("matrix", sb, 16, false);
+    for (const m of this.swMeshes) m.thinInstanceSetBuffer("matrix", m.metadata.moves ? moving.slice() : fixed.slice(), 16, false);
   }
 
-  // ---------- Keycaps ----------
-  /** Build keycaps for a set; a single atlas texture holds every cap's color + legend. */
+  // ---------------------------------------------------------------- keycaps
+  /** Build keycaps for a set; one atlas texture holds every legend and the plain cap colors. */
   setKeycaps(set: KeycapSet | null) {
-    this.capNode.getChildMeshes().forEach((m) => m.dispose());
+    this.capNode.getChildMeshes().forEach((m) => {
+      this.shadows?.removeShadowCaster(m);
+      m.dispose();
+    });
     this.caps.fill(null);
-    this.capSetKey = set ? `${set.id}:${set.colorway.alpha}${set.colorway.accent}` : null;
+    this.capSet = set;
+    this.capSetKey = set ? `${set.id}:${set.colorway.alpha}${set.colorway.accent}:${this.family}` : null;
     if (!set) return;
-    const shape = KEYCAP_PROFILE_SHAPE[set.profile];
     const cw = set.colorway;
     const keys = this.layout.keys;
     const labels = Array.from(new Set(keys.map((k) => `${k.kind}|${k.label}`)));
     const cols = 16;
-    const cell = 96;
+    const cell = 128;
     const rows = Math.ceil((labels.length + 3) / cols);
     const tex = new DynamicTexture("capAtlas", { width: cols * cell, height: rows * cell }, this.scene, true);
+    tex.anisotropicFilteringLevel = 8;
     const g = tex.getContext() as unknown as CanvasRenderingContext2D;
     const colorOf = (kind: string) => (kind === "alpha" ? cw.alpha : kind === "mod" ? cw.mod : cw.accent);
     const legendOf = (kind: string) => (kind === "alpha" ? cw.legendOnAlpha : kind === "mod" ? cw.legendOnMod : cw.legendOnAccent);
@@ -509,94 +856,74 @@ export class Board {
       const cy = Math.floor(i / cols) * cell;
       const W = cols * cell;
       const H = rows * cell;
-      // DynamicTexture v is flipped (invertY): canvas top = v 1
-      return [(cx + 4) / W, 1 - (cy + cell - 4) / H, (cx + cell - 4) / W, 1 - (cy + 4) / H];
+      return [(cx + 6) / W, 1 - (cy + cell - 6) / H, (cx + cell - 6) / W, 1 - (cy + 6) / H];
     };
-    g.textAlign = "center";
-    g.textBaseline = "middle";
     labels.forEach((key, i) => {
       const [kind, label] = key.split("|");
       const cx = (i % cols) * cell;
       const cy = Math.floor(i / cols) * cell;
       g.fillStyle = colorOf(kind);
       g.fillRect(cx, cy, cell, cell);
-      if (label) {
-        g.fillStyle = readableOn(legendOf(kind), colorOf(kind));
-        const size = label.length === 1 ? 50 : label.length <= 3 ? 30 : 22;
-        g.font = `700 ${size}px system-ui, "Segoe UI", Roboto, sans-serif`;
-        g.fillText(label, cx + cell / 2, cy + cell / 2 + 2);
+      if (!label) return;
+      g.fillStyle = readableOn(legendOf(kind), colorOf(kind));
+      const single = label.length === 1;
+      const size = single ? 46 : label.length <= 3 ? 28 : 22;
+      g.font = `600 ${size}px Inter, system-ui, sans-serif`;
+      if (single && /[A-Za-z0-9]/.test(label)) {
+        g.textAlign = "left";
+        g.textBaseline = "top";
+        g.fillText(label, cx + cell * 0.2, cy + cell * 0.17);
+      } else {
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.fillText(label, cx + cell / 2, cy + cell / 2);
       }
     });
-    // solid side colors
-    const solidIndex: Record<string, number> = {};
+    const solid: Record<string, [number, number]> = {};
     ["alpha", "mod", "accent"].forEach((kind, j) => {
       const i = labels.length + j;
-      solidIndex[kind] = i;
       g.fillStyle = colorOf(kind);
       g.fillRect((i % cols) * cell, Math.floor(i / cols) * cell, cell, cell);
+      const [u0, v0, u1, v1] = cellUv(i);
+      solid[kind] = [(u0 + u1) / 2, (v0 + v1) / 2];
     });
     tex.update();
     this.owned.push(tex);
-    const spec = set.material === "pbt" ? 0.06 : set.material === "abs" ? 0.35 : 0.2;
-    const mat = this.mat(`caps-${set.id}`, "#ffffff", { texture: tex, spec });
-    mat.specularPower = set.material === "abs" ? 64 : 20;
-
+    const rough = set.material === "pbt" ? 0.72 : set.material === "abs" ? 0.3 : 0.5;
+    const mat = this.pbr(`caps-${set.id}`, "#ffffff", { rough, tex });
+    mat.albedoColor = Color3.White();
+    if (set.material === "abs") {
+      mat.clearCoat.isEnabled = true;
+      mat.clearCoat.intensity = 0.25;
+      mat.clearCoat.roughness = 0.25;
+    }
+    const profile = PROFILE_GEO[set.profile] ? set.profile : "cherry";
+    const capZ = this.geo.capZ;
+    const cache = new Map<string, VertexData>();
     keys.forEach((k, i) => {
       const li = labels.indexOf(`${k.kind}|${k.label}`);
-      const [u0, v0, u1, v1] = cellUv(li);
-      const si = solidIndex[k.kind];
-      const [su0, sv0, su1, sv1] = cellUv(si);
-      const bw = k.w - 0.07;
-      const bd = k.h - 0.07;
-      // legend area: a square in the middle (left-aligned on wide modifiers)
-      const sq = Math.min(bw, bd) * 0.9;
-      const data = roundedBoxData({
-        w: bw,
-        h: shape.height,
-        d: bd,
-        r: 0.08,
-        seg: 4,
-        sideUv: [(su0 + su1) / 2, (sv0 + sv1) / 2],
-        shape: (q, t) => {
-          const shrink = shape.taper * t;
-          q.x *= (bw / 2 - shrink) / (bw / 2);
-          q.z *= (bd / 2 - shrink) / (bd / 2);
-          if (t > 0.95) q.y -= shape.dish * (1 - Math.min(1, (q.x * q.x) / ((bw / 2) ** 2)));
-        },
-      });
-      // remap top-face UVs so the legend square sits in the cell
-      const pos = data.positions!;
-      const nrm = data.normals!;
-      const uvs = data.uvs!;
-      // +x is the viewer's left: wide modifiers get their legend on the left (+x) side
-      const offX = k.w > 1.3 && k.h === 1 ? (bw - sq) / 2 - 0.3 : 0;
-      for (let v = 0; v < pos.length / 3; v++) {
-        if (nrm[v * 3 + 1] > 0.6) {
-          const lx = -(pos[v * 3] - offX) / sq + 0.5;
-          const lz = -pos[v * 3 + 2] / sq + 0.5;
-          if (lx >= 0 && lx <= 1 && lz >= 0 && lz <= 1) {
-            uvs[v * 2] = u0 + lx * (u1 - u0);
-            uvs[v * 2 + 1] = v0 + lz * (v1 - v0);
-          } else {
-            // outside the legend square: plain cap color (the cell's corner)
-            uvs[v * 2] = u0 + 0.02 * (u1 - u0);
-            uvs[v * 2 + 1] = v0 + 0.02 * (v1 - v0);
-          }
-        }
+      const row = PROFILE_GEO[profile].sculpted ? profileRow(k.rowFromBottom) : 3;
+      const legendLeft = k.w > 1.3 && k.h === 1 && k.label !== "" && k.label !== "Enter";
+      const key = `${row}|${k.w}|${k.h}|${legendLeft}|${li}`;
+      let vd = cache.get(key);
+      if (!vd) {
+        const geo = buildKeycap({ profile, row, w: k.w, h: k.h, cell: cellUv(li), solid: solid[k.kind], legendLeft });
+        vd = new VertexData();
+        vd.positions = geo.positions;
+        vd.normals = geo.normals;
+        vd.uvs = geo.uvs;
+        vd.indices = geo.indices;
+        cache.set(key, vd);
       }
       const m = new Mesh(`cap${i}`, this.scene);
-      data.applyToMesh(m);
+      vd.applyToMesh(m);
       m.material = mat;
       m.parent = this.capNode;
-      const [x, z] = this.keyXZ(k);
-      const r = Math.min(k.rowFromBottom, ROW_TILT.length - 1);
-      const rest = Y.capBase + shape.height / 2 + ROW_LIFT[r] * shape.sculpt;
-      m.position.set(x, rest, z);
-      m.rotation.x = -ROW_TILT[r] * shape.sculpt;
+      const [cx, cy] = this.keyCap(k);
+      m.position.set(-cx, capZ, -cy);
       m.isPickable = false;
       m.receiveShadows = true;
       this.shadows?.addShadowCaster(m);
-      this.capRest[i] = rest;
       this.caps[i] = m;
     });
     this.applyCaps();
@@ -616,18 +943,31 @@ export class Board {
   }
 
   private applyCaps() {
+    const capZ = this.geo.capZ;
+    const travel = this.geo.travel;
     this.caps.forEach((m, i) => {
       if (!m) return;
       const a = this.capIn[i];
       m.setEnabled(a > 0.001);
       const p = Math.min(1, this.press[i]);
-      m.position.y = this.capRest[i] + (1 - a) * 1.8 - Math.sin(p * Math.PI * 0.5) * 0.16;
+      m.position.y = capZ + (1 - easeOutCubic(a)) * 35 - p * travel;
     });
   }
 
-  // ---------- Interaction ----------
+  // ---------------------------------------------------------------- interaction
   pressKey(i: number) {
     this.press[i] = 1;
+  }
+
+  private refreshHit() {
+    const keys = this.layout.keys;
+    const hm = new Float32Array(16 * keys.length);
+    const y = this.geo.capZ + 4;
+    keys.forEach((k, i) => {
+      const [cx, cy] = this.keyCap(k);
+      Matrix.Compose(new Vector3(k.w * PITCH - 1, 22, k.h * PITCH - 1), Quaternion.Identity(), new Vector3(-cx, y, -cy)).copyToArray(hm, i * 16);
+    });
+    this.hit.thinInstanceSetBuffer("matrix", hm, 16, true);
   }
 
   /** Key under a world-space ray (thin-instance picking on invisible hit boxes). */
@@ -636,10 +976,11 @@ export class Board {
     return info?.hit && info.thinInstanceIndex !== undefined && info.thinInstanceIndex >= 0 ? info.thinInstanceIndex : null;
   }
 
-  /** World position of a key's top (for screen projection, particles…). */
-  keyWorld(i: number, yU = 1.1): Vector3 {
-    const [x, z] = this.keyXZ(this.layout.keys[i]);
-    return Vector3.TransformCoordinates(new Vector3(x, yU, z), this.root.getWorldMatrix());
+  /** World position above a key; `aboveMm` = height over the plate (default: just above the keycap). */
+  keyWorld(i: number, aboveMm?: number): Vector3 {
+    const [cx, cy] = this.keyCap(this.layout.keys[i]);
+    const y = aboveMm ?? this.geo.capZ + 12;
+    return Vector3.TransformCoordinates(new Vector3(-cx, y, -cy), this.mmNode.getWorldMatrix());
   }
 
   setMarker(i: number, color: "green" | "red" | "orange" | "yellow" | null) {
@@ -653,22 +994,22 @@ export class Board {
   private refreshMarkers() {
     const n = this.layout.keys.length;
     const hasCaps = this.caps.some((c, i) => c && this.capIn[i] > 0.5);
-    const y = hasCaps ? Y.capBase + 0.75 : Y.switchTop + 0.25;
+    const y = hasCaps ? this.geo.capZ + 16 : this.geo.housingTop + 5;
     for (const [key, mesh] of Object.entries(this.markerMeshes)) {
       const buf = new Float32Array(16 * n);
       this.layout.keys.forEach((k, i) => {
         const s = this.markerOf[i] === key ? 1 : 0;
-        const [x, z] = this.keyXZ(k);
-        Matrix.Compose(new Vector3(s, s, s), Quaternion.Identity(), new Vector3(x, y, z)).copyToArray(buf, i * 16);
+        const [cx, cy] = this.keyCap(k);
+        Matrix.Compose(new Vector3(s, s, s), Quaternion.Identity(), new Vector3(-cx, y, -cy)).copyToArray(buf, i * 16);
       });
       mesh.thinInstanceSetBuffer("matrix", buf, 16, false);
     }
   }
 
-  // ---------- Animation ----------
+  // ---------------------------------------------------------------- animation
   private drop(node: TransformNode, toY: number) {
-    node.position.y = toY + 3;
-    this.tweens.push({ node, prop: "y", from: toY + 3, to: toY, t: 0, dur: 0.45 });
+    node.position.y = toY + 40;
+    this.tweens.push({ node, prop: "y", from: toY + 40, to: toY, t: 0, dur: 0.5 });
   }
 
   get animating(): boolean {
@@ -679,7 +1020,7 @@ export class Board {
     this.tweens = this.tweens.filter((tw) => {
       tw.t += dt;
       const x = Math.min(1, tw.t / tw.dur);
-      if (tw.prop === "y") tw.node.position.y = tw.from + (tw.to - tw.from) * easeOutBack(x);
+      if (tw.prop === "y") tw.node.position.y = tw.from + (tw.to - tw.from) * easeOutCubic(x);
       else tw.node.rotation.x = tw.from + (tw.to - tw.from) * easeInOut(x);
       if (x >= 1) {
         tw.done?.();
@@ -691,15 +1032,15 @@ export class Board {
     let cap = false;
     for (let i = 0; i < this.switchIn.length; i++) {
       if (this.switchIn[i] !== this.switchTarget[i]) {
-        this.switchIn[i] = this.switchTarget[i] > this.switchIn[i] ? Math.min(1, this.switchIn[i] + dt * 6) : 0;
+        this.switchIn[i] = this.switchTarget[i] > this.switchIn[i] ? Math.min(1, this.switchIn[i] + dt * 5) : 0;
         sw = true;
       }
       if (this.capIn[i] !== this.capTarget[i]) {
-        this.capIn[i] = this.capTarget[i] > this.capIn[i] ? Math.min(1, this.capIn[i] + dt * 5) : 0;
+        this.capIn[i] = this.capTarget[i] > this.capIn[i] ? Math.min(1, this.capIn[i] + dt * 4) : 0;
         cap = true;
       }
       if (this.press[i] > 0) {
-        this.press[i] = Math.max(0, this.press[i] - dt * 7);
+        this.press[i] = Math.max(0, this.press[i] - dt * 6);
         sw = cap = true;
       }
     }
@@ -710,30 +1051,12 @@ export class Board {
     }
   }
 
-  /** For display pieces that never animate: merge keycaps into one mesh (hundreds of draw calls → one). */
-  bakeStatic() {
-    const caps = this.caps.filter((c): c is Mesh => !!c && c.isEnabled());
-    if (caps.length > 1) {
-      caps.forEach((c) => this.shadows?.removeShadowCaster(c));
-      const merged = Mesh.MergeMeshes(caps, true, true);
-      if (merged) {
-        merged.parent = this.capNode;
-        merged.receiveShadows = true;
-        this.shadows?.addShadowCaster(merged);
-      }
-      this.caps.fill(null);
-    }
-    this.hit.setEnabled(false);
-    Object.values(this.markerMeshes).forEach((m) => m.setEnabled(false));
-    this.root.getChildMeshes().forEach((m) => m.freezeWorldMatrix());
-  }
-
   dispose() {
-    this.root.getChildMeshes().forEach((m) => {
+    this.base.getChildMeshes().forEach((m) => {
       this.shadows?.removeShadowCaster(m);
       m.dispose();
     });
-    this.root.dispose();
+    this.base.dispose();
     this.owned.forEach((o) => o.dispose());
   }
 }

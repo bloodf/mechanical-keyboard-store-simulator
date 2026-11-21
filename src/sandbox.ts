@@ -9,6 +9,18 @@ import { CASE_MATERIALS, PCBS, PLATES, STABS } from "./data/parts";
 
 const q = new URLSearchParams(location.search);
 const canvas = document.getElementById("c") as HTMLCanvasElement;
+if (["caps", "switches", "board2"].includes(q.get("view") ?? "")) {
+  void import("./sandbox/art").then((m) => m.run(canvas, q));
+  throw new Error("art sandbox started");
+}
+if (q.get("view") === "workshop") {
+  void import("./sandbox/workshop").then((m) => m.run(canvas, q));
+  throw new Error("workshop sandbox started");
+}
+if (q.get("view") === "envgen") {
+  void import("./sandbox/envgen").then((m) => m.run(canvas));
+  throw new Error("envgen started");
+}
 if (q.get("view") === "store") {
   void import("./engine/store/storeSandbox").then((m) => m.run(canvas, q));
   throw new Error("store sandbox started"); // stop the rest of this module

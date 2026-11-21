@@ -10,7 +10,7 @@ const { chromium } = require("playwright");
   await p.goto(`http://localhost:5173/sandbox.html?${query}`, { timeout: 240000 });
   await p.waitForFunction(() => window.ready, null, { timeout: 60000 });
   await p.waitForTimeout(Number(process.env.WAIT || 2500));
-  await p.screenshot({ path: out });
+  await p.screenshot({ path: out, timeout: 180000 });
   if (errs.length) console.log("errors:", errs);
   await b.close();
 })();

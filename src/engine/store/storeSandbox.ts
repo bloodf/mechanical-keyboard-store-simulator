@@ -27,7 +27,6 @@ export async function run(canvas: HTMLCanvasElement, q: URLSearchParams) {
     b.setKeycaps(cat.keycaps[i + 2]);
     b.setAllCaps(true, true);
     b.root.parent = a;
-    b.bakeStatic();
   });
   const mode = (q.get("mode") ?? "attract") as StoreMode;
   if (mode === "bench") {
