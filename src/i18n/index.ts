@@ -1,4 +1,5 @@
 import en from "./locales/en";
+import { namesEn, type NamePools } from "./locales/en.names";
 
 type PluralForms = Partial<Record<Intl.LDMLPluralRule, string>> & { other: string };
 type Entry = string | PluralForms;
@@ -12,6 +13,7 @@ let messages: Messages = en;
 let plural = new Intl.PluralRules(current);
 
 export function setLocale(code: string) {
+  if (typeof document === "undefined") return;
   const base = code.split("-")[0];
   const found = locales[code] ? code : locales[base] ? base : "en";
   current = found;
@@ -43,6 +45,20 @@ export function t(key: MessageKey, params: Params = {}): string {
   return str.replace(/\{(\w+)\}/g, (m, k: string) => (k in params ? String(params[k]) : m));
 }
 
+/**
+ * Translate a dynamic key (e.g. "part.case." + id). Params starting with "@" are themselves
+ * translation keys; a param named "money" is formatted as currency.
+ */
+export function tx(key: string, params: Record<string, string | number> = {}): string {
+  const resolved: Params = {};
+  for (const [k, v] of Object.entries(params)) {
+    if (typeof v === "string" && v.startsWith("@")) resolved[k] = t(v.slice(1) as MessageKey);
+    else if (k === "money" && typeof v === "number") resolved[k] = formatMoney(v);
+    else resolved[k] = v;
+  }
+  return t(key as MessageKey, resolved);
+}
+
 export function formatMoney(cents: number): string {
   return new Intl.NumberFormat(current, { style: "currency", currency: "USD" }).format(cents / 100);
 }
@@ -56,6 +72,19 @@ export function applyDomTranslations(root: ParentNode = document) {
   root.querySelectorAll<HTMLElement>("[data-i18n]").forEach((el) => {
     el.textContent = t(el.dataset.i18n as MessageKey);
   });
+}
+
+const namePools: Record<string, NamePools> = { en: namesEn };
+/** Word pools for generated names in the current locale. */
+export function names(): NamePools {
+  return namePools[current] ?? namesEn;
+}
+
+/** Number of variants for keys like "prefix.0", "prefix.1", … (used for generated dialogue). */
+export function variantCount(prefix: string): number {
+  let n = 0;
+  while ((messages as Record<string, unknown>)[`${prefix}.${n}`] !== undefined) n++;
+  return n;
 }
 
 export function allKeys(): MessageKey[] {

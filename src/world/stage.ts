@@ -6,6 +6,11 @@ export interface SceneController {
   camera: THREE.PerspectiveCamera;
   /** Frame-rate cap. Menus use 30 to save battery; gameplay uses 60. */
   maxFps?: number;
+  /** If set, the frame rate drops to this when the scene isn't busy and there's no input. */
+  idleFps?: number;
+  isBusy?(): boolean;
+  /** Drop to idleFps even with input (e.g. a 2D minigame has the player's attention). */
+  forceIdle?(): boolean;
   update(dt: number, time: number): void;
   resize?(w: number, h: number): void;
   dispose(): void;
@@ -28,6 +33,7 @@ export class Stage {
   private lastRender = 0;
   private windowStart = 0;
   private windowFrames = 0;
+  private lastInput = 0;
 
   constructor(container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
@@ -43,6 +49,13 @@ export class Stage {
     this.resize();
     this.timer.connect(document); // pauses time while the tab is hidden
     this.renderer.setAnimationLoop((ts) => this.frame(ts));
+    const poke = () => (this.lastInput = performance.now());
+    for (const ev of ["pointermove", "pointerdown", "keydown", "wheel", "touchmove"]) window.addEventListener(ev, poke, { passive: true });
+  }
+
+  /** Ask for full frame rate for a moment (e.g. after a UI change that moves 3D things). */
+  wake() {
+    this.lastInput = performance.now();
   }
 
   /** Stop rendering entirely (e.g. another tab took over the store). */
@@ -99,7 +112,10 @@ export class Stage {
 
   private frame(ts: number) {
     if (!this.running || !this.current) return;
-    const targetFps = this.current.maxFps ?? 60;
+    const c = this.current;
+    const quiet = !(c.isBusy?.() ?? false) && (ts - this.lastInput > 1500 || (c.forceIdle?.() ?? false));
+    const idle = c.idleFps !== undefined && quiet;
+    const targetFps = idle ? c.idleFps! : (c.maxFps ?? 60);
     // Frame cap (small tolerance so 60 Hz displays don't drop to 30 when capped at 60).
     if (ts - this.lastRender < 1000 / targetFps - 2) return;
     this.lastRender = ts;
@@ -107,6 +123,6 @@ export class Stage {
     const dt = Math.min(this.timer.getDelta(), 0.1);
     this.current.update(dt, this.timer.getElapsed());
     this.renderer.render(this.current.scene, this.current.camera);
-    this.adapt(ts, targetFps);
+    if (!idle) this.adapt(ts, targetFps);
   }
 }

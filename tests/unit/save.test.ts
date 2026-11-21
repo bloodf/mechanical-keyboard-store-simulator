@@ -201,6 +201,26 @@ describe("live tampering (edited while the game is open)", () => {
   });
 });
 
+describe("save migration", () => {
+  it("an authentic v1 save (Phase 0) upgrades to v2 instead of being called cheating", () => {
+    const kv = new MemoryKV();
+    const v1 = {
+      version: 1, seed: "ABCDEF12", createdAt: 1, day: 3, money: 12345, reputation: 300, playTimeSec: 10,
+      stats: { customersServed: 0, keyboardsBuilt: 0, membraneExplained: 0, angryCustomers: 0 },
+      inventory: {}, goalsCompleted: [], unlocks: [], flags: { knownCheater: false, cheatCount: 0 },
+    };
+    kv.setItem(KEYS.b, seal(JSON.stringify({ slot: "b", counter: 1, savedAt: 1, state: v1 }), "slot:b"));
+    const r = new SaveManager(kv).load();
+    expect(r.kind).toBe("ok");
+    if (r.kind === "ok") {
+      expect(r.state.version).toBe(2);
+      expect(r.state.money).toBe(12345);
+      expect(r.state.jobBoard).toEqual([]);
+      expect(r.state.activeBuild).toBeNull();
+    }
+  });
+});
+
 describe("validateState", () => {
   it("accepts a new game and rejects impossible values", () => {
     const s = createNewGame();

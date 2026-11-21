@@ -6,7 +6,8 @@ import { defaultStorage, KEYS, SaveManager } from "./save/saveManager";
 import { Stage } from "./world/stage";
 import { TitleScene } from "./world/titleScene";
 import { CheaterScene } from "./world/cheaterScene";
-import { showCheater, showDebug, showOtherTab, showShop, showTitle, type Hud } from "./ui/screens";
+import { showCheater, showDebug, showOtherTab, showTitle } from "./ui/screens";
+import { Bench } from "./ui/bench/bench";
 import { toast } from "./ui/dom";
 import { play, unlockAudio } from "./audio/engine";
 
@@ -18,7 +19,7 @@ const saves = new SaveManager(kv);
 const stage = new Stage(document.getElementById("app")!);
 
 let state: GameState | null = null;
-let hud: Hud | null = null;
+let bench: Bench | null = null;
 let lastSaveAt = performance.now();
 let suspended = false; // another tab took over the store
 
@@ -93,32 +94,38 @@ if ("BroadcastChannel" in window) {
 
 function goTitle() {
   if (!persist()) return;
+  bench?.dispose();
+  bench = null;
   stage.set(new TitleScene(stage.renderer));
   showTitle({
     save: state,
     persistent,
-    onContinue: () => state && goShop(state),
+    onContinue: () => state && goBench(state),
     onNew: () => {
       play("progress.dayStart");
       play("shop.doorBell", { delay: 0.5 });
-      goShop(saves.newGame());
+      goBench(saves.newGame());
     },
   });
 }
 
-function goShop(s: GameState) {
+const DEV_UNLOCK_KEY = "mkss.dev.unlockAll";
+const unlockAll = () => import.meta.env.DEV && sessionStorage.getItem(DEV_UNLOCK_KEY) === "1";
+
+function goBench(s: GameState) {
   state = s;
-  hud = showShop(s, goTitle);
+  bench?.dispose();
+  bench = new Bench({ stage, state: s, persist: () => void persist(), onMenu: goTitle, unlockAll });
 }
 
 function goCheater(count: number) {
   state = null;
-  hud = null;
+  bench?.dispose();
+  bench = null;
   stage.set(new CheaterScene());
   showCheater(count, () => {
     state = saves.acceptShame();
-    stage.set(new TitleScene(stage.renderer));
-    goShop(state);
+    goBench(state);
   });
 }
 
@@ -135,7 +142,7 @@ function boot() {
 
 // Play-time clock + periodic autosave while in the shop.
 setInterval(() => {
-  if (!state || !hud || document.hidden) return;
+  if (!state || !bench || document.hidden) return;
   state.playTimeSec += 1;
   if (performance.now() - lastSaveAt > 30_000) persist();
 }, 1000);
@@ -150,13 +157,29 @@ if (import.meta.env.DEV) {
   void Promise.all([import("./audio/engine"), import("./audio/library")]).then(([engine, lib]) => {
     (window as unknown as Record<string, unknown>).__mkssAudio = { renderOffline: engine.renderOffline, ids: lib.SFX_IDS };
   });
+  (window as unknown as Record<string, unknown>).__mkssBench = {
+    autoStep: () => bench?.autoStep(),
+    step: () => bench?.session?.step ?? null,
+    state: () => state,
+    keyScreen: (id: number) => bench?.scene.keyScreen(id) ?? null,
+    keyCount: () => bench?.scene.board?.layout.keys.length ?? 0,
+    faults: () => bench?.session?.faults ?? [],
+    camera: () => bench && { pos: bench.scene.camera.position.toArray(), view: bench.scene.camera.view, aspect: bench.scene.camera.aspect, fov: bench.scene.camera.fov },
+  };
   showDebug({
+    autoStep: () => bench?.autoStep(),
+    unlockAll: () => {
+      const on = sessionStorage.getItem(DEV_UNLOCK_KEY) !== "1";
+      sessionStorage.setItem(DEV_UNLOCK_KEY, on ? "1" : "0");
+      toast(`${t("debug.unlockAll")}: ${on ? "ON" : "OFF"}`);
+      if (state) goBench(state);
+    },
     addMoney: () => {
       if (!state) return;
       play("money.register");
       state.money += 100_00;
       persist(true);
-      hud?.update(state);
+      bench?.renderHud();
     },
     nextDay: () => {
       if (!state) return;
@@ -164,7 +187,7 @@ if (import.meta.env.DEV) {
       play("progress.dayStart", { delay: 1.5 });
       state.day += 1;
       persist(true);
-      hud?.update(state);
+      bench?.renderHud();
     },
     tamper: () => {
       // Simulates a player editing localStorage: flip one character in the newest slot.

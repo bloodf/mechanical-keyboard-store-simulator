@@ -1,6 +1,6 @@
 # Mechanical Keyboard Store Simulator — Game Plan (draft v1)
 
-> Status: **Phase 0 done** (foundation, save, cheater screen) **+ sound effects system.** Next: Phase 1. Decisions are recorded in §0.
+> Status: **Phase 0 done** (foundation, save, cheater screen) **+ sound effects system + the complete keyboard-building process** (see §5b). Next: Phase 1 (3D store + characters). Decisions are recorded in §0.
 
 ---
 
@@ -123,6 +123,23 @@ Compatibility rules create real puzzles: a 65% PCB doesn't fit a TKL case, a hot
 caps causes interference, etc. We start with a few simple rules and add more later.
 
 ---
+
+### 5b. What is built now (workbench build process)
+
+Playable today from **Continue / New Game → Workbench**:
+
+- **Job board** with 3 generated customer tickets (persona, voice, quote in their own words, layout/sound/feel/color wishes, budget, picky flag). Take or skip.
+- **14 build steps** (solder only appears for solder PCBs), each with live 3D assembly on a first-person bench:
+  case (6 layouts × 6 materials × 3–6 colors) → PCB (5) → dampening (5, incl. **tape-mod minigame**) → plate (7) →
+  stabilizers (3 tiers + 2 mods + **wire-lubing minigame**) → switches (14 generated per run) → **switch-lubing minigame** →
+  **install minigame** (drag on the 3D board; rushing bends pins) → **soldering rhythm minigame** → **case-screw torque minigame** →
+  keycaps (12 generated sets) → **key tester** (real keyboard or taps, sweep, find & fix dead/chattering keys) →
+  **sound check** (type or auto-type; radar chart vs. target; tweak dampening) → **delivery** (stars, reaction + voice, pay, tip, reputation).
+- **Sound model**: every part moves depth / brightness / ping / scratch / rattle / volume / click; the same profile drives the synthesized
+  typing sound, the radar chart and the score. A balance test proves every customer request is achievable.
+- **Unlocks**: some parts unlock after N delivered builds (placeholder for the goals system, Phase 7).
+- **Saves**: the job board and the build in progress are saved after every change; reloading resumes mid-build. Save format v2 with automatic migration from v1.
+- **Temporary stand-ins** (replaced later): job board instead of walking customers (Phase 1/3); parts are paid at delivery instead of coming from inventory/suppliers (Phase 2 economy).
 
 ## 6. The sound system (the standout feature)
 
@@ -274,10 +291,10 @@ We build a **playable vertical slice first**, then widen it.
 |---|---|---|
 | **0. Foundation** | Vite + TS + Three.js scaffold, seeded RNG, state store, **encrypted save + cheater screen** | Blank shop that saves, loads and catches tampering |
 | **1. Shop, character & movement** | Procedural shop, **human character prototype (for your approval)**, third-person controls (desktop + touch), interaction prompts, first-person bench camera | Walk around your shop |
-| **2. Parts & inventory** | Part catalog, compatibility rules, inventory, supplier computer, deliveries | Buy and stock parts |
+| **2. Parts & inventory** | ✅ Part catalog (generated per run). ⏳ Inventory, supplier computer, deliveries | Buy and stock parts |
 | **3. Customers** | Customer generator (looks + personality), walking/queue, dialogue box, first 3 request types | Customers come and ask for things |
-| **4. Build flow** | Bench steps 1–11 in simple form, then the lube and test mini-games | Build and deliver a keyboard ← **vertical slice complete** |
-| **5. Sound engine** | Profile calculation + synthesizer + radar-chart sound check | Hear the difference between builds |
+| **4. Build flow** | ✅ All bench steps and minigames (done ahead of Phases 1–3, at your request) | Build and deliver a keyboard |
+| **5. Sound engine** | ✅ Profile calculation + synthesizer + radar-chart sound check. ⏳ More nuance later | Hear the difference between builds |
 | **6. Drama** | Membrane customer, angry customers, haggling, refunds, reviews, events | The funny part |
 | **7. Progression** | Days, rent, reputation, upgrades, unlocks, bankruptcy | A full run |
 | **8. Polish** | Tutorial, juice, extra SFX passes, graphics settings, balancing, performance, mobile check | Shareable game |

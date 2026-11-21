@@ -40,3 +40,8 @@ export function toast(text: string, kind: "info" | "error" = "info") {
   setTimeout(() => el.classList.add("out"), 1600);
   setTimeout(() => el.remove(), 2100);
 }
+
+/** Drop null/false entries so optional children can be passed to replaceChildren/append. */
+export function nodes(...xs: (Node | string | null | undefined | false)[]): (Node | string)[] {
+  return xs.filter((x): x is Node | string => x !== null && x !== undefined && x !== false);
+}

@@ -1,4 +1,4 @@
-import { formatMoney, formatNumber, t } from "../i18n";
+import { formatMoney, t } from "../i18n";
 import type { GameState } from "../core/state";
 import { h, uiRoot, clearUi } from "./dom";
 import { play, unlockAudio } from "../audio/engine";
@@ -66,47 +66,6 @@ function confirmNew(onYes: () => void) {
   document.body.append(dlg);
 }
 
-export interface Hud {
-  update(state: GameState): void;
-}
-
-export function showShop(state: GameState, onMenu: () => void): Hud {
-  clearUi();
-  const day = h("span", { class: "chip", id: "hud-day" });
-  const money = h("span", { class: "chip chip-money", id: "hud-money" });
-  const rep = h("span", { class: "chip", id: "hud-rep" });
-  const badge = h("span", { class: "chip chip-badge", id: "hud-badge" }, t("hud.cheaterBadge"));
-  const hud = h(
-    "div",
-    { class: "hud" },
-    h("div", { class: "hud-left" }, day, money, rep, badge),
-    h(
-      "div",
-      { class: "hud-right" },
-      h("button", { class: "btn btn-small", id: "btn-hud-settings", "aria-label": t("settings.open"), title: t("settings.open"), onclick: () => openSettings() }, "⚙"),
-      h("button", { class: "btn btn-small", id: "btn-menu", onclick: () => (play("ui.back"), onMenu()) }, t("hud.backToTitle")),
-    ),
-  );
-  const card = h(
-    "div",
-    { class: "card placeholder" },
-    h("h2", {}, t("shop.placeholder.title")),
-    h("p", {}, t("shop.placeholder.body")),
-  );
-  uiRoot().append(hud, card);
-  const api: Hud = {
-    update(s) {
-      day.textContent = t("hud.day", { day: s.day });
-      money.textContent = formatMoney(s.money);
-      rep.textContent = t("hud.reputation", { stars: formatNumber(s.reputation / 100, 1) });
-      badge.hidden = !s.flags.knownCheater;
-      badge.title = t("hud.cheaterBadge.tooltip", { count: s.flags.cheatCount });
-    },
-  };
-  api.update(state);
-  return api;
-}
-
 export function showCheater(cheatCount: number, onStartOver: () => void) {
   clearUi();
   const jokeIdx = [0, 1, 2, 3, 4, 5, 6, 7].sort(() => Math.random() - 0.5).slice(0, 2);
@@ -169,12 +128,14 @@ export function showCheater(cheatCount: number, onStartOver: () => void) {
   requestAnimationFrame(tick);
 }
 
-export function showDebug(actions: Record<"addMoney" | "nextDay" | "tamper" | "wipe", () => void>) {
+export function showDebug(actions: Record<"addMoney" | "nextDay" | "tamper" | "wipe" | "autoStep" | "unlockAll", () => void>) {
   document.getElementById("debug")?.remove();
   const panel = h(
     "details",
     { class: "debug", id: "debug" },
     h("summary", {}, t("debug.title")),
+    h("button", { class: "btn btn-small", id: "dbg-auto", onclick: actions.autoStep }, t("debug.autoStep")),
+    h("button", { class: "btn btn-small", id: "dbg-unlock", onclick: actions.unlockAll }, t("debug.unlockAll")),
     h("button", { class: "btn btn-small", id: "dbg-money", onclick: actions.addMoney }, t("debug.addMoney")),
     h("button", { class: "btn btn-small", id: "dbg-day", onclick: actions.nextDay }, t("debug.nextDay")),
     h("button", { class: "btn btn-small", id: "dbg-tamper", onclick: actions.tamper }, t("debug.tamper")),

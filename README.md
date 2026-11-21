@@ -11,17 +11,22 @@ npm run build      # static files in dist/ — upload anywhere (itch.io, GitHub 
 npm run preview    # serve the production build on :4173
 ```
 
+## Play
+
+Title → **New Game** → pick a job on the **job board** → build it step by step at the workbench → deliver.
+On desktop you can use your **real keyboard** in the key test and sound check.
+
 ## Test
 
 ```bash
 npm test                                   # unit tests (RNG, save/crypto/tamper detection, i18n, sound library)
-npm run test:e2e                           # browser smoke test (desktop + mobile) + audio check of every sound (needs `npm run dev`)
+npm run test:e2e                           # smoke (desktop + mobile), audio check, full build played with real input (needs `npm run dev`)
 BASE_URL=http://localhost:4173/ npm run test:e2e   # same against `npm run preview`
 ```
 
 ## Dev tools
 
-In `npm run dev` only, a **Dev tools** tab on the right edge lets you add money, advance the day,
+In `npm run dev` only, a **Dev tools** tab (bottom-left) lets you **auto-complete the current build step**, **unlock all parts**, add money, advance the day,
 **simulate save tampering** (to see the cheater screen), open the **sound board** (play every effect, try customer
 voices, type to test keyboard sounds), and wipe everything. It is not in production builds.
 
@@ -35,9 +40,12 @@ checks the new sound renders properly.
 
 | Folder | What |
 |---|---|
-| `src/core` | Seeded RNG, game state + validation |
+| `src/core` | Seeded RNG, game state + validation + save migrations |
+| `src/data` | Layouts (40%…full-size), part definitions & sound effects of parts, per-run generated catalog |
+| `src/build` | Job generator, build session/steps, sound profile + matching, scoring |
+| `src/ui/bench` | Workbench screen, part pickers, minigames (`games/`), 3D-interactive steps, radar chart |
 | `src/save` | AES-GCM sealing, two-slot save manager, tamper / live-edit / multi-tab detection, shame record |
 | `src/i18n` | `t("key")`, plurals, money formatting; `locales/en.ts` holds every string |
-| `src/world` | Renderer stage, procedural keyboard model + colorways, title and cheater scenes |
+| `src/world` | Renderer stage, layered procedural keyboard (`boardModel`), bench scene, colorways, title and cheater scenes |
 | `src/audio` | SFX engine (volume channels, settings), sound library, parametric key sound, customer voice synth |
 | `src/ui` | DOM screens: title, HUD, cheater overlay, dialogs |

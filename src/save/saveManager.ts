@@ -8,7 +8,7 @@
  * localStorage.setItem is atomic per key, so a crash can never leave a half-written slot;
  * therefore a slot that fails to open is treated as tampering, not corruption.
  */
-import { createNewGame, validateState, type GameState } from "../core/state";
+import { createNewGame, migrateState, validateState, type GameState } from "../core/state";
 import { open, seal } from "./crypto";
 
 export const KEYS = {
@@ -180,6 +180,7 @@ export class SaveManager {
     try {
       const env = JSON.parse(json) as Envelope;
       if (env.slot !== slot) return null;
+      env.state = migrateState(env.state) as GameState;
       if (!Number.isInteger(env.counter) || env.counter < 1) return null;
       if ((env.counter % 2 === 0 ? "a" : "b") !== slot) return null;
       if (!validateState(env.state)) return null;
