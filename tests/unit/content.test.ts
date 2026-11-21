@@ -6,7 +6,7 @@ import { generateCatalog } from "../../src/data/catalog";
 import { generateJob } from "../../src/build/jobs";
 import { ALL_STEPS } from "../../src/build/session";
 import { AXES } from "../../src/build/profile";
-import { COLOR_FAMILIES } from "../../src/world/colorway";
+import { COLOR_FAMILIES } from "../../src/data/colorway";
 
 const keys = new Set<string>(allKeys());
 const has = (k: string) => expect(keys.has(k), k).toBe(true);

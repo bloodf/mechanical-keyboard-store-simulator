@@ -1,7 +1,7 @@
 import type { VoiceParams } from "../audio/voice";
 import type { LayoutId } from "../data/layouts";
 import type { CaseMaterial, DampDef, HueName, PcbDef, PlateDef, StabDef, StabMod } from "../data/parts";
-import type { ColorFamily } from "../world/colorway";
+import type { ColorFamily, Colorway } from "../data/colorway";
 
 export type SoundWord = "thocky" | "clacky" | "creamy" | "marbly" | "poppy" | "quiet" | "loud" | "clicky" | "deep" | "crisp";
 export type FeelReq = "any" | "light" | "heavy" | "linear" | "tactile" | "clicky" | "smooth";
@@ -71,7 +71,8 @@ export interface BuildSession {
   step: StepId;
   layout: LayoutId | null;
   caseMaterial: CaseMaterial | null;
-  caseColor: string | null;
+  caseColor: { id: string; hex: string } | null; // id "custom" = rolled with the 🎲 button
+  customColorway: Colorway | null; // for the custom printed keycap set
   pcb: PcbDef["id"] | null;
   damp: DampDef["id"][];
   tapeQuality: number | null; // 0..1 (tape mod minigame)

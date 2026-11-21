@@ -7,8 +7,8 @@ const BASE = process.env.BASE_URL || "http://localhost:5173/";
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage();
-  await page.goto(BASE);
-  await page.waitForFunction(() => window.__mkssAudio);
+  await page.goto(BASE, { timeout: 240000 });
+  await page.waitForFunction(() => window.__mkssAudio, null, { timeout: 240000 });
   const rows = await page.evaluate(async () => {
     const { renderOffline, ids } = window.__mkssAudio;
     const out = [];

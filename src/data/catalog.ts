@@ -5,8 +5,9 @@
  */
 import { derive, type Rng } from "../core/rng";
 import { names } from "../i18n";
-import { COLOR_FAMILIES, randomColorway, type Colorway } from "../world/colorway";
-import type { KeycapMaterial, KeycapProfile, Requires, SwitchHousing, SwitchType } from "./parts";
+import { COLOR_FAMILIES, randomColorway, type Colorway } from "../data/colorway";
+import { CASE_MATERIALS, type CaseColor, type CaseMaterial, type KeycapMaterial, type KeycapProfile, type Requires, type SwitchHousing, type SwitchType } from "./parts";
+import { classifyColor, hslToHex, mixHex } from "./color";
 
 export interface SwitchProduct {
   id: string;
@@ -38,7 +39,34 @@ export interface KeycapSet {
 export interface Catalog {
   switches: SwitchProduct[];
   keycaps: KeycapSet[];
+  /** Per-run case colors: a few classics + generated ones. */
+  caseColors: Record<CaseMaterial, CaseColor[]>;
 }
+
+/** The "custom printed" keycap set: its colorway is rolled by the player (stored in the build). */
+export const CUSTOM_KEYCAPS_ID = "kc.custom";
+export const CUSTOM_KEYCAPS_PRICE = 120_00;
+
+/** A random case color suited to the material (for generated palettes and the 🎲 button). */
+export function randomCaseColor(material: CaseMaterial, rnd: () => number): string {
+  const h = rnd();
+  switch (material) {
+    case "plastic":
+      return rnd() < 0.5 ? hslToHex(h, 0.35 + rnd() * 0.3, 0.72 + rnd() * 0.14) : hslToHex(h, 0.55 + rnd() * 0.3, 0.45 + rnd() * 0.15);
+    case "aluminum":
+      return hslToHex(h, 0.2 + rnd() * 0.45, 0.3 + rnd() * 0.4);
+    case "acrylic":
+    case "polycarbonate":
+      return hslToHex(h, 0.45 + rnd() * 0.4, 0.6 + rnd() * 0.25);
+    case "wood":
+      return mixHex(["#6b4a33", "#c49a6c", "#e3c99a"][Math.floor(rnd() * 3)], hslToHex(h, 0.6, 0.4), 0.25 + rnd() * 0.2);
+    case "brass":
+      return mixHex("#d4a94a", hslToHex(h, 0.5, 0.55), rnd() * 0.25);
+  }
+}
+
+/** Materials where the player can roll a custom color. */
+export const CUSTOM_COLOR_MATERIALS: CaseMaterial[] = ["plastic", "aluminum", "acrylic", "polycarbonate"];
 
 interface SwitchArchetype {
   type: SwitchType;
@@ -160,7 +188,18 @@ export function generateCatalog(seed: string): Catalog {
     };
   });
 
-  return { switches, keycaps };
+  const extra: Record<CaseMaterial, number> = { plastic: 6, aluminum: 6, acrylic: 3, polycarbonate: 2, wood: 2, brass: 0 };
+  const caseColors = Object.fromEntries(
+    CASE_MATERIALS.map((m) => {
+      const generated: CaseColor[] = Array.from({ length: extra[m.id] }, (_, i) => {
+        const hex = randomCaseColor(m.id, () => rng.next());
+        return { id: `g${i}`, hex, hue: classifyColor(hex) };
+      });
+      return [m.id, [...m.colors, ...generated]];
+    }),
+  ) as Record<CaseMaterial, CaseColor[]>;
+
+  return { switches, keycaps, caseColors };
 }
 
 const catalogCache = new Map<string, Catalog>();

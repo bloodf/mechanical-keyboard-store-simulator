@@ -10,7 +10,9 @@ describe("i18n", () => {
     expect(t("cheater.count", { count: 7 })).toMatch(/Offense #7/);
   });
   it("has no empty strings", () => {
+    const intentionallyEmpty = new Set(["color.tone.mid"]); // "blue", not "mid blue"
     for (const k of allKeys()) {
+      if (intentionallyEmpty.has(k)) continue;
       const v = en[k];
       const strings = typeof v === "string" ? [v] : Object.values(v);
       for (const s of strings) expect(s.trim().length, k).toBeGreaterThan(0);

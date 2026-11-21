@@ -4,7 +4,7 @@
  * radar chart says is what you hear.
  */
 import type { KeySoundProfile } from "../audio/keyPress";
-import type { Catalog, SwitchProduct } from "../data/catalog";
+import { CUSTOM_KEYCAPS_ID, CUSTOM_KEYCAPS_PRICE, type Catalog, type KeycapSet, type SwitchProduct } from "../data/catalog";
 import { getLayout, needsStab, type LayoutId } from "../data/layouts";
 import {
   CASE_MATERIALS,
@@ -46,6 +46,16 @@ function apply(p: Record<Axis, number>, m: SoundMods | undefined, scale = 1) {
 
 export function findSwitch(cat: Catalog, id: string | null): SwitchProduct | undefined {
   return id ? cat.switches.find((s) => s.id === id) : undefined;
+}
+
+/** The keycap set in this build (the custom printed set carries the player's rolled colorway). */
+export function keycapSetOf(b: BuildSession, cat: Catalog): KeycapSet | undefined {
+  if (!b.keycapsId) return undefined;
+  if (b.keycapsId === CUSTOM_KEYCAPS_ID) {
+    if (!b.customColorway) return undefined;
+    return { id: CUSTOM_KEYCAPS_ID, brand: "", name: "", material: "pbt", profile: "low", colorway: b.customColorway, price: CUSTOM_KEYCAPS_PRICE };
+  }
+  return cat.keycaps.find((k) => k.id === b.keycapsId);
 }
 
 export function computeProfile(b: BuildSession, cat: Catalog): BuildProfile {
@@ -94,7 +104,7 @@ export function computeProfile(b: BuildSession, cat: Catalog): BuildProfile {
   if (b.screws) apply(p, { rattle: 0.12 * b.screws.loose, hollow: 0.05 * b.screws.loose });
 
   // Keycaps
-  const kc = b.keycapsId ? cat.keycaps.find((k) => k.id === b.keycapsId) : undefined;
+  const kc = keycapSetOf(b, cat);
   if (kc) {
     apply(p, KEYCAP_MATERIAL_SOUND[kc.material]);
     apply(p, KEYCAP_PROFILE_SOUND[kc.profile]);
@@ -243,7 +253,7 @@ export function partsCost(b: BuildSession, cat: Catalog): { total: number; lines
   if (stab) lines.push({ part: "stabs", cents: stab.price + (b.stabMods.includes("bandaid") ? 1_00 : 0) });
   const sw = findSwitch(cat, b.switchId);
   if (sw) lines.push({ part: "switches", cents: sw.pricePerSwitch * keys });
-  const kc = b.keycapsId ? cat.keycaps.find((k) => k.id === b.keycapsId) : undefined;
+  const kc = keycapSetOf(b, cat);
   if (kc) lines.push({ part: "keycaps", cents: scale(kc.price) });
   return { total: lines.reduce((s, l) => s + l.cents, 0), lines };
 }

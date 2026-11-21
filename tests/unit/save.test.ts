@@ -213,11 +213,22 @@ describe("save migration", () => {
     const r = new SaveManager(kv).load();
     expect(r.kind).toBe("ok");
     if (r.kind === "ok") {
-      expect(r.state.version).toBe(2);
+      expect(r.state.version).toBe(3);
+      expect(r.state.profile.created).toBe(false);
       expect(r.state.money).toBe(12345);
       expect(r.state.jobBoard).toEqual([]);
       expect(r.state.activeBuild).toBeNull();
     }
+  });
+});
+
+describe("profile", () => {
+  it("rejects broken avatars and over-long names", () => {
+    const s = createNewGame();
+    expect(validateState(s)).toBe(true);
+    expect(validateState({ ...s, profile: { ...s.profile, name: "x".repeat(50) } })).toBe(false);
+    expect(validateState({ ...s, profile: { ...s.profile, avatar: { ...s.profile.avatar, skin: "red" } } })).toBe(false);
+    expect(validateState({ ...s, profile: { ...s.profile, avatar: { ...s.profile.avatar, hairStyle: "mohawk9000" } } })).toBe(false);
   });
 });
 

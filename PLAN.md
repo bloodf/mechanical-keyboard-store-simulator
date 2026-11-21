@@ -1,6 +1,6 @@
 # Mechanical Keyboard Store Simulator — Game Plan (draft v1)
 
-> Status: **Phase 0 done** (foundation, save, cheater screen) **+ sound effects system + the complete keyboard-building process** (see §5b). Next: Phase 1 (3D store + characters). Decisions are recorded in §0.
+> Status: **Phases 0, 1, 2 (catalog), 4, 5 done** + early Phase 3 (customers walk in and react). Engine: **Babylon.js** with an all-in-canvas UI. Next: Phase 2 economy (inventory & suppliers), Phase 3 customer conversations, Phase 6 drama. Decisions are recorded in §0.
 
 ---
 
@@ -13,6 +13,10 @@
 | Language | English only, but **i18n-ready from day one**: every visible string goes through `t("key")`. |
 | Devices | **Desktop and mobile.** Keyboard + mouse, plus touch (virtual joystick, tap to interact, large buttons). |
 | Audio | **Sound effects only, no music.** Every sound is synthesized in code (no audio files), with small random variation each play. |
+| Engine | **Babylon.js** (game engine: scenes, PBR/standard materials, shadows, glow, bloom/FXAA/tone-mapping pipeline, particles, cameras, input). Replaced Three.js. |
+| UI | **Everything is drawn inside the canvas** with Babylon GUI (no HTML UI, no scrollbars): keycap-style buttons, panels, tiles, charts. The browser "HTML-in-Canvas" API is still experimental (flag-only), so canvas-drawn UI is used instead; it works on every browser. |
+| Player | Can **edit their avatar, name and store name** (character creator on New Game; mirror / 👤 later). The store's neon sign shows the store name. |
+| Colors | Case colors and keycap colorways are **generated per run** (plus a 🎲 custom color for cases and a custom printed keycap set). |
 | Gameplay depth | **Always arcade-like.** Mini-games are short, readable and forgiving. No simulation homework. |
 | Game length | **Endless sandbox** with **goals** that unlock new tools, materials and stock. |
 | Cheating | Funny cheater screen → save wiped → new game carries a permanent **"🤡 Known Cheater" badge**. |
@@ -42,8 +46,8 @@ exaggerated animation, facial expressions, emotes and writing.
 |---|---|---|
 | Language | TypeScript | Big game with lots of data types. Types catch bugs early. |
 | Build tool | Vite | Fast dev server. Builds to plain static files you can host anywhere (itch.io, GitHub Pages, Netlify). |
-| 3D | Three.js | Mature WebGL library, works in every modern browser. No engine lock-in. |
-| UI / menus | HTML/CSS overlay (small framework-free layer, or Preact if it grows) | Menus, dialogue and inventory are easier to build in HTML than in 3D. |
+| 3D | ~~Three.js~~ → Babylon.js (v0.2) | Game-engine features and canvas UI |
+| UI / menus | ~~HTML/CSS overlay~~ → Babylon GUI in the canvas (v0.2) | Game-like UI, no scrollbars, one rendering surface |
 | Audio | Web Audio API, **synthesized SFX only (no music)** | Every effect is generated in code. Switch sounds come from the build's parts (see §6), so every build really sounds different. |
 | Randomness | Seeded PRNG (e.g. `sfc32`/`mulberry32`) | "Always new" but reproducible, which helps debugging and lets us detect save tampering. |
 | Save | `localStorage` + Web Crypto (AES-GCM + HMAC-SHA-256) | See §8. |
@@ -124,12 +128,21 @@ caps causes interference, etc. We start with a few simple rules and add more lat
 
 ---
 
+### 5a. The shop (v0.2)
+
+- **3D store** built in code: wood floor, green accent wall with the **neon store-name sign**, shelves of products, a **workbench** with pegboard/lamp/monitor, **counter + register**, **job board** (cork), **mirror**, display table with keyboards, posters, plants, windows onto a street.
+- **Third-person** technician (WASD/arrows + mouse/touch orbit, Shift to run; touch **joystick** on phones), collision with furniture, interaction prompts (E / tap) with highlight outlines.
+- **Procedural humans** with real proportions (joint hierarchy, face with expressions, 10 hair styles, facial hair, 4 tops, glasses, hats, headphones, apron) and animations (idle breathing, blinking, walk, talk, wave, happy jump, angry stomp).
+- **Character creator / profile** (name, store name, body, skin, hair, eyes, outfit, extras, 🎲 randomize) with live 3D preview.
+- **Customers walk in** when you take a job, wait at the counter, react to your keyboard (happy jump / angry stomp) and walk out.
+- **First-person bench** inside the same scene; the camera frames the keyboard in the screen area the UI leaves free.
+
 ### 5b. What is built now (workbench build process)
 
 Playable today from **Continue / New Game → Workbench**:
 
 - **Job board** with 3 generated customer tickets (persona, voice, quote in their own words, layout/sound/feel/color wishes, budget, picky flag). Take or skip.
-- **14 build steps** (solder only appears for solder PCBs), each with live 3D assembly on a first-person bench:
+- **14 build steps** (solder only appears for solder PCBs), each with live 3D assembly on a first-person bench. Since v0.2 **every minigame is in 3D** (tape on the flipped PCB, brushing a 3D stabilizer wire, an exploded 3D switch next to a lube gauge, a soldering iron with a shrinking ring and smoke, a screwdriver turning screws on the case):
   case (6 layouts × 6 materials × 3–6 colors) → PCB (5) → dampening (5, incl. **tape-mod minigame**) → plate (7) →
   stabilizers (3 tiers + 2 mods + **wire-lubing minigame**) → switches (14 generated per run) → **switch-lubing minigame** →
   **install minigame** (drag on the 3D board; rushing bends pins) → **soldering rhythm minigame** → **case-screw torque minigame** →
@@ -139,7 +152,7 @@ Playable today from **Continue / New Game → Workbench**:
   typing sound, the radar chart and the score. A balance test proves every customer request is achievable.
 - **Unlocks**: some parts unlock after N delivered builds (placeholder for the goals system, Phase 7).
 - **Saves**: the job board and the build in progress are saved after every change; reloading resumes mid-build. Save format v2 with automatic migration from v1.
-- **Temporary stand-ins** (replaced later): job board instead of walking customers (Phase 1/3); parts are paid at delivery instead of coming from inventory/suppliers (Phase 2 economy).
+- **Temporary stand-ins** (replaced later): jobs are picked from the job board (customers then walk in) instead of customers arriving on their own with a conversation (Phase 3); parts are paid at delivery instead of coming from inventory/suppliers (Phase 2 economy).
 
 ## 6. The sound system (the standout feature)
 
@@ -269,13 +282,14 @@ Only a server can fully prevent that. We'll obfuscate the key derivation to rais
 mechanical-keyboard-store-simulator/
   index.html
   src/
-    main.ts               # boot, game loop
-    core/                 # rng, events, state store, time/day cycle
-    save/                 # serialize, crypto, migrations, tamper detection
-    world/                # three.js scene, shop, lighting, camera, interaction
-    gen/                  # procedural: customers, names, dialogue grammar, requests, parts, events
-    data/                 # part definitions, compatibility rules, sound coefficients
-    build/                # workbench state machine + each mini-game
+    main.ts               # boot
+    core/                 # rng, state + migrations
+    save/                 # serialize, crypto, tamper detection
+    engine/               # Babylon: app shell, geometry, textures, keyboard model, humans, store scene, cheater scene
+    gui/                  # in-canvas UI kit (theme, widgets, Ui) + screens (title, HUD, profile, settings, cheater…)
+    game/                 # orchestration: game flow, job board, results, bench mode (steps + 3D minigames)
+    data/                 # layouts, parts, catalog, colors, avatars
+    build/                # build session, jobs, sound profile, scoring
     audio/                # SFX engine + library, key-sound synth, customer voices (no music)
     ui/                   # HUD, dialogue box, inventory, computer/shop, menus, cheater screen
   tests/
@@ -290,7 +304,7 @@ We build a **playable vertical slice first**, then widen it.
 | Phase | Goal | Playable result |
 |---|---|---|
 | **0. Foundation** | Vite + TS + Three.js scaffold, seeded RNG, state store, **encrypted save + cheater screen** | Blank shop that saves, loads and catches tampering |
-| **1. Shop, character & movement** | Procedural shop, **human character prototype (for your approval)**, third-person controls (desktop + touch), interaction prompts, first-person bench camera | Walk around your shop |
+| **1. Shop, character & movement** | ✅ Procedural shop, human characters, character creator, third-person controls (desktop + touch), interaction prompts, first-person bench | Walk around your shop |
 | **2. Parts & inventory** | ✅ Part catalog (generated per run). ⏳ Inventory, supplier computer, deliveries | Buy and stock parts |
 | **3. Customers** | Customer generator (looks + personality), walking/queue, dialogue box, first 3 request types | Customers come and ask for things |
 | **4. Build flow** | ✅ All bench steps and minigames (done ahead of Phases 1–3, at your request) | Build and deliver a keyboard |

@@ -1,9 +1,10 @@
 /** Judges a finished build against the customer's request → stars, money, reputation. */
 import type { Catalog } from "../data/catalog";
-import { CASE_MATERIALS, type HueName } from "../data/parts";
-import { computeProfile, feelMatch, layoutMatches, partsCost, soundMatch } from "./profile";
+import type { HueName } from "../data/parts";
+import { classifyColor } from "../data/color";
+import { computeProfile, feelMatch, keycapSetOf, layoutMatches, partsCost, soundMatch } from "./profile";
 import type { BuildSession, ThemeReq } from "./types";
-import type { Colorway } from "../world/colorway";
+import type { Colorway } from "../data/colorway";
 
 export type ScoreComponent = "layout" | "sound" | "feel" | "theme" | "quality";
 export const WEIGHTS: Record<ScoreComponent, number> = { layout: 0.2, sound: 0.35, feel: 0.15, theme: 0.15, quality: 0.15 };
@@ -52,8 +53,8 @@ export function themeMatch(req: ThemeReq, cw: Colorway | undefined, caseHue: Hue
 
 export function evaluateBuild(b: BuildSession, cat: Catalog): BuildResult {
   const { sound, feel } = computeProfile(b, cat);
-  const kc = b.keycapsId ? cat.keycaps.find((k) => k.id === b.keycapsId) : undefined;
-  const caseHue = CASE_MATERIALS.find((m) => m.id === b.caseMaterial)?.colors.find((c) => c.id === b.caseColor)?.hue;
+  const kc = keycapSetOf(b, cat);
+  const caseHue = b.caseColor ? classifyColor(b.caseColor.hex) : undefined;
 
   const unresolved = b.faults.filter((f) => !b.fixed.includes(f.key)).length;
   const rattleQ = sound.rattle <= 0.3 ? 1 : Math.max(0, 1 - (sound.rattle - 0.3) * 2);

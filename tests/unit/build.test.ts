@@ -14,7 +14,7 @@ function randomBuild(job: JobRequest, cat: Catalog, rng: Rng, builds: number): B
   b.layout = "65";
   const cm = rng.pick(ok(CASE_MATERIALS));
   b.caseMaterial = cm.id;
-  b.caseColor = cm.colors[0].id;
+  b.caseColor = { id: cm.colors[0].id, hex: cm.colors[0].hex };
   b.pcb = rng.pick(ok(PCBS)).id;
   b.damp = ok(DAMPENING).filter(() => rng.chance(0.5)).map((d) => d.id);
   b.tapeQuality = 1;

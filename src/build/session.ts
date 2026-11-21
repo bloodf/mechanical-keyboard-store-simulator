@@ -13,6 +13,7 @@ export function newSession(job: JobRequest): BuildSession {
     layout: null,
     caseMaterial: null,
     caseColor: null,
+    customColorway: null,
     pcb: null,
     damp: [],
     tapeQuality: null,

@@ -24,7 +24,7 @@ export const LAYOUT_PRICE_FACTOR: Record<LayoutId, number> = { "40": 0.8, "60": 
 // ---------- Cases ----------
 export type CaseMaterial = "plastic" | "acrylic" | "aluminum" | "polycarbonate" | "wood" | "brass";
 export interface CaseColor {
-  id: string;
+  id: string; // named classics have i18n names (part.color.<id>); generated ones are described by tone + hue
   hex: string;
   hue: HueName | "neutral";
 }

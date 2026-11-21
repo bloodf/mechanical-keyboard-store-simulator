@@ -1,8 +1,9 @@
-import { newWorldSeed } from "./rng";
+import { newWorldSeed, Rng } from "./rng";
+import { defaultTechnician, validateAvatar, NAME_MAX, STORE_NAME_MAX, type AvatarParams } from "../data/avatar";
 import type { BuildSession, JobRequest } from "../build/types";
 import type { LayoutId } from "../data/layouts";
 
-export const STATE_VERSION = 2;
+export const STATE_VERSION = 3;
 export const START_MONEY_CENTS = 50_000; // $500
 
 /** Everything that is persisted. Keep it plain JSON (no classes, no Maps). */
@@ -26,6 +27,7 @@ export interface GameState {
   jobBoard: JobRequest[]; // tickets waiting at the bench
   activeBuild: BuildSession | null; // keyboard in progress (survives reloads)
   history: BuildRecord[]; // most recent first, capped
+  profile: PlayerProfile;
   inventory: Record<string, number>; // partId -> count
   goalsCompleted: string[];
   unlocks: string[];
@@ -33,6 +35,18 @@ export interface GameState {
     knownCheater: boolean; // the 🤡 badge
     cheatCount: number;
   };
+}
+
+export interface PlayerProfile {
+  name: string;
+  storeName: string;
+  avatar: AvatarParams;
+  created: boolean; // false until the player has been through the character creator
+}
+
+export function defaultProfile(seed: string): PlayerProfile {
+  const rng = new Rng(seed + "/avatar");
+  return { name: "", storeName: "", avatar: defaultTechnician(() => rng.next()), created: false };
 }
 
 export interface BuildRecord {
@@ -48,9 +62,11 @@ export const HISTORY_MAX = 30;
 
 export function createNewGame(opts: { cheatCount?: number; seed?: string } = {}): GameState {
   const cheatCount = opts.cheatCount ?? 0;
+  const seed = opts.seed ?? newWorldSeed();
   return {
     version: STATE_VERSION,
-    seed: opts.seed ?? newWorldSeed(),
+    seed,
+    profile: defaultProfile(seed),
     createdAt: Date.now(),
     day: 1,
     money: START_MONEY_CENTS,
@@ -95,6 +111,13 @@ export function migrateState(raw: unknown): unknown {
       history: [],
     };
   }
+  if (s.version === 2) {
+    // v3 adds the player profile. Builds in progress used an older case-color format: return the job to the board.
+    const board = Array.isArray(s.jobBoard) ? [...s.jobBoard] : [];
+    const active = s.activeBuild as { job?: unknown } | null;
+    if (active && active.job) board.unshift(active.job);
+    s = { ...s, version: 3, profile: defaultProfile(String(s.seed)), activeBuild: null, jobBoard: board.slice(0, 3) };
+  }
   return s;
 }
 
@@ -132,6 +155,9 @@ export function validateState(s: unknown): s is GameState {
   if (!isObj(s.inventory)) return false;
   for (const v of Object.values(s.inventory)) if (!isInt(v, 0, 100_000)) return false;
   if (!isStrArr(s.goalsCompleted) || !isStrArr(s.unlocks)) return false;
+  const p = s.profile;
+  if (!isObj(p) || typeof p.name !== "string" || p.name.length > NAME_MAX || typeof p.storeName !== "string" || p.storeName.length > STORE_NAME_MAX) return false;
+  if (typeof p.created !== "boolean" || !validateAvatar(p.avatar)) return false;
   const f = s.flags;
   if (!isObj(f) || typeof f.knownCheater !== "boolean" || !isInt(f.cheatCount, 0)) return false;
   if (f.knownCheater !== f.cheatCount > 0) return false;

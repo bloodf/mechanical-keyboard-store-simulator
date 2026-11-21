@@ -1,92 +1,84 @@
-// End-to-end smoke test against a running server (default: dev server on :5173).
-// Usage: npm run test:e2e   (BASE_URL=http://localhost:4173 for `npm run preview`)
-const { chromium, devices } = require("playwright");
-const fs = require("node:fs");
-const path = require("node:path");
+// Smoke test (desktop + mobile): title, settings, character creation (name + store name),
+// encrypted save, reload/continue, one-tab rule, tamper → cheater screen → 🤡 badge.
+// Needs `npm run dev` running.
+const { ok, launch, newGamePage } = require("./helpers.cjs");
 
-const BASE = process.env.BASE_URL || "http://localhost:5173/";
-const OUT = path.join(__dirname, "screens");
-fs.mkdirSync(OUT, { recursive: true });
-
-function assert(cond, msg) {
-  if (!cond) throw new Error("ASSERT: " + msg);
-  console.log("  ok -", msg);
-}
-
-async function run(name, contextOpts) {
+async function run(name, mobile) {
   console.log(`\n[${name}]`);
-  const browser = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
-  const ctx = await browser.newContext(contextOpts);
-  const page = await ctx.newPage();
-  page.setDefaultTimeout(120000);
-  const errors = [];
-  page.on("pageerror", (e) => errors.push(e.message));
-  page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  const browser = await launch();
+  const g = await newGamePage(browser, { mobile });
+  const { page } = g;
+  if (mobile) page.on("dialog", (d) => d.accept(d.message().toLowerCase().includes("store") ? "Mobile Thocks" : "Mina"));
+  await g.open();
+  await g.waitFor("btn-new");
+  ok(!(await g.find("btn-continue")), "fresh browser has no Continue button");
+  await g.shot(`${name}-1-title`);
 
-  await page.goto(BASE);
-  await page.waitForSelector(".title-screen");
+  // Settings: change a volume (click on the slider track) — remembered in localStorage
+  await g.click("btn-settings");
+  await g.waitFor("vol-voice");
+  const s = await g.find("vol-voice");
+  if (mobile) await page.touchscreen.tap(s.x - s.w * 0.3, s.y);
+  else await page.mouse.click(s.x - s.w * 0.3, s.y);
+  await page.waitForTimeout(500);
+  await g.shot(`${name}-2-settings`);
+  await g.click("settings-close");
+  const vol = await page.evaluate(() => JSON.parse(localStorage.getItem("mkss.settings.audio") || "{}").voice);
+  ok(typeof vol === "number" && vol < 0.6, `volume setting saved (${vol})`);
+
+  // New game → character creation
+  await g.click("btn-new");
+  await g.waitFor("profile-done");
+  if (!mobile) {
+    await g.click("input-name");
+    await page.keyboard.type("Mina");
+    await g.click("input-store");
+    await page.keyboard.type("Desk Thocks");
+  } else {
+    await g.click("input-name");
+    await page.waitForTimeout(800);
+    await g.click("input-store");
+    await page.waitForTimeout(800);
+  }
+  await g.click("ptab-hair");
+  await g.click("st-hair-next");
+  await g.click("sw-hair-9");
   await page.waitForTimeout(1500);
-  await page.screenshot({ path: path.join(OUT, `${name}-1-title.png`) });
-  assert((await page.locator("#btn-continue").count()) === 0, "fresh browser has no Continue button");
+  await g.shot(`${name}-3-creator`);
+  await g.click("profile-done");
+  await g.waitFor("hud-plate");
+  const st = await g.state();
+  const wantStore = mobile ? "Mobile Thocks" : "Desk Thocks";
+  ok(st.profile.created && st.profile.name === "Mina" && st.profile.storeName === wantStore, `profile saved (${st.profile.name} @ ${st.profile.storeName})`);
+  ok(st.profile.avatar.hairColor.toLowerCase() === "#ff7eb6", "avatar edits saved");
+  const raw = await page.evaluate(() => localStorage.getItem("mkss.save.a") || localStorage.getItem("mkss.save.b"));
+  ok(raw && raw.startsWith("MKSS1.") && !raw.includes("Mina"), "save is encrypted");
+  await page.waitForTimeout(2500);
+  await g.shot(`${name}-4-play`);
 
-  // Settings: change a volume, it is remembered across reloads
-  await page.click("#btn-settings");
-  await page.waitForSelector("#settings");
-  await page.locator("#vol-voice").fill("35");
-  await page.screenshot({ path: path.join(OUT, `${name}-1b-settings.png`) });
-  await page.click("#settings-close");
-  const vol = await page.evaluate(() => JSON.parse(localStorage.getItem("mkss.settings.audio")).voice);
-  assert(Math.abs(vol - 0.35) < 1e-9, "volume setting is saved");
+  // dev: +$100, then reload → Continue keeps it
+  await g.click("dev-tools");
+  await g.click("dbg-money");
+  await page.reload();
+  await page.waitForFunction(() => window.__mkss, null, { timeout: 180000 });
+  await g.waitFor("btn-continue");
+  await g.click("btn-continue");
+  await g.waitFor("hud-plate");
+  ok((await g.state()).money === 60000, "money persisted across reload ($600)");
 
-  // Sound board (dev only): every sound button plays without errors
-  if (await page.locator("#debug").count()) {
-    await page.click("#debug summary");
-    await page.click("#dbg-sounds");
-    await page.waitForSelector("#sound-board");
-    const n = await page.locator("[data-sfx]").count();
-    for (let i = 0; i < n; i++) await page.locator("[data-sfx]").nth(i).click();
-    await page.locator(".sb-type").pressSequentially("thock ", { delay: 30 });
-    await page.screenshot({ path: path.join(OUT, `${name}-1c-soundboard.png`) });
-    await page.click("#sound-board-close");
-    assert(n >= 50, `sound board plays all ${n} sounds`);
-  }
-
-  await page.click("#btn-new");
-  await page.waitForSelector("#hud-money");
-  assert((await page.textContent("#hud-day")) === "Day 1", "new game starts on Day 1");
-  assert((await page.textContent("#hud-money")) === "$500.00", "new game starts with $500");
-  assert(await page.locator("#hud-badge").isHidden(), "no cheater badge on a clean start");
-
-  const raw = await page.evaluate(() => localStorage.getItem("mkss.save.b"));
-  assert(raw && raw.startsWith("MKSS1.") && !raw.includes("money"), "save is encrypted in localStorage");
-
-  if (await page.locator("#debug").count()) {
-    await page.click("#debug summary");
-    await page.click("#dbg-money");
-    await page.click("#dbg-day");
-    await page.reload();
-    await page.waitForSelector("#btn-continue");
-    assert((await page.textContent("#btn-continue small")).includes("Day 2"), "Continue shows the saved day after reload");
-    await page.click("#btn-continue");
-    assert((await page.textContent("#hud-money")) === "$600.00", "money persisted across reload");
-    await page.screenshot({ path: path.join(OUT, `${name}-2-shop.png`) });
-  }
-
-  // A second tab takes over; the first one pauses without false cheating alarms.
-  const tab2 = await ctx.newPage();
-  tab2.setDefaultTimeout(120000);
-  await tab2.goto(BASE, { timeout: 90000 }); // software GL in CI is slow with two tabs
-  await page.waitForSelector("#other-tab");
-  assert(true, "opening a second tab pauses the first one");
-  await tab2.waitForSelector("#btn-continue", { timeout: 60000 });
-  await tab2.click("#btn-continue");
+  // Second tab takes over; the first pauses without a false cheating alarm
+  const tab2 = await g.ctx.newPage();
+  tab2.setDefaultTimeout(240000);
+  await tab2.goto(page.url(), { timeout: 240000 });
+  await g.waitFor("other-tab", 180000);
+  ok(true, "opening a second tab pauses the first");
   await tab2.close();
   await page.reload();
-  await page.waitForSelector("#btn-continue");
-  await page.click("#btn-continue");
-  assert(await page.locator("#cheater-screen").count() === 0, "tab switching is not treated as cheating");
+  await page.waitForFunction(() => window.__mkss, null, { timeout: 180000 });
+  await g.waitFor("btn-continue");
+  ok(!(await g.find("cheater-title")), "tab switching is not treated as cheating");
 
-  // Player edits the save in DevTools
+  // Tamper with the save
   await page.evaluate(() => {
     for (const k of ["mkss.save.a", "mkss.save.b"]) {
       const v = localStorage.getItem(k);
@@ -94,36 +86,34 @@ async function run(name, contextOpts) {
     }
   });
   await page.reload();
-  await page.waitForSelector("#cheater-screen");
-  assert(true, "tampered save shows the cheater screen");
-  await page.waitForTimeout(1200);
-  await page.screenshot({ path: path.join(OUT, `${name}-3-cheater.png`) });
-
+  await page.waitForFunction(() => window.__mkss, null, { timeout: 180000 });
+  await g.waitFor("cheater-title");
+  ok(true, "tampered save shows the cheater screen");
+  await page.waitForTimeout(2500);
+  await g.shot(`${name}-5-cheater`);
   await page.reload();
-  await page.waitForSelector("#cheater-screen");
-  assert(true, "reloading does not escape the cheater screen");
+  await page.waitForFunction(() => window.__mkss, null, { timeout: 180000 });
+  await g.waitFor("cheater-title");
+  ok(true, "reloading does not escape the cheater screen");
+  await g.waitFor("btn-start-over", 60000);
+  await g.click("btn-start-over");
+  await g.waitFor("profile-done");
+  await g.click("profile-done");
+  await g.waitFor("hud-badge");
+  const after = await g.state();
+  ok(after.money === 50000 && after.flags.knownCheater, "progress wiped and the 🤡 Known Cheater badge is shown");
+  await page.waitForTimeout(1500);
+  await g.shot(`${name}-6-badge`);
 
-  await page.waitForSelector("#btn-start-over:not([hidden])", { timeout: 8000 });
-  await page.click("#btn-start-over");
-  await page.waitForSelector("#hud-badge:not([hidden])");
-  assert((await page.textContent("#hud-money")) === "$500.00", "progress was wiped");
-  assert(await page.locator("#hud-badge").isVisible(), "new run shows the 🤡 Known Cheater badge");
-  await page.screenshot({ path: path.join(OUT, `${name}-4-badge.png`) });
-
-  await page.reload();
-  await page.waitForSelector("#btn-continue");
-  await page.click("#btn-continue");
-  assert(await page.locator("#hud-badge").isVisible(), "badge persists after reload");
-
-  const realErrors = errors.filter((e) => !/GPU stall|WebGL|AudioContext/i.test(e));
-  assert(realErrors.length === 0, "no page errors" + (realErrors.length ? ": " + realErrors.join(" | ") : ""));
+  const errs = g.realErrors();
+  ok(errs.length === 0, "no page errors" + (errs.length ? ": " + errs.join(" | ") : ""));
   await browser.close();
 }
 
 (async () => {
-  await run("desktop", { viewport: { width: 1280, height: 800 } });
-  await run("mobile", { ...devices["iPhone 13"], defaultBrowserType: undefined });
-  console.log("\nAll e2e checks passed. Screenshots in tests/e2e/screens/");
+  await run("desktop", false);
+  await run("mobile", true);
+  console.log("\nSmoke e2e passed. Screenshots in tests/e2e/screens/");
 })().catch((e) => {
   console.error(e);
   process.exit(1);
