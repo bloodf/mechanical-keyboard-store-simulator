@@ -7,7 +7,7 @@ import { C, S, T } from "../theme";
 import type { Ui } from "../ui";
 import { button, H_CENTER, label, rule, slider, stack, V_BOTTOM } from "../widgets";
 
-const SAMPLE: Record<Bus, SfxId> = { ui: "ui.click", world: "shop.doorBell", voice: "voice.talk", keyboard: "kb.thock" };
+const SAMPLE: Record<Bus, SfxId> = { ui: "ui.click", world: "shop.boxDrop", voice: "voice.talk", keyboard: "kb.thock" };
 
 export function openSettings(ui: Ui, app: GameApp) {
   const s = getAudioSettings();
@@ -16,7 +16,7 @@ export function openSettings(ui: Ui, app: GameApp) {
     clearTimeout(timer);
     timer = window.setTimeout(() => play(id), 140);
   };
-  ui.modal({ w: 560, h: 640, name: "settings", dismissable: true }, (p, close) => {
+  ui.modal({ w: 560, h: 590, name: "settings", dismissable: true }, (p, close) => {
     const col = stack({ w: "88%", y: S.xl, ha: H_CENTER, spacing: S.sm });
     col.addControl(label(t("settings.title"), { size: T.h1, weight: 700, align: H_CENTER, h: 44 }));
     col.addControl(label(t("settings.audio"), { size: T.h3, weight: 700, color: C.inkSoft, h: 32 }));
@@ -27,7 +27,7 @@ export function openSettings(ui: Ui, app: GameApp) {
       col.addControl(r);
     };
     row("settings.master", s.master, "vol-master", (v) => (setAudioSettings({ master: v }), sample("ui.confirm")));
-    for (const b of BUSES) row(`settings.bus.${b}` as MessageKey, s[b], `vol-${b}`, (v) => (setAudioSettings({ [b]: v }), sample(SAMPLE[b])));
+    for (const b of BUSES.filter((x) => x !== "voice")) row(`settings.bus.${b}` as MessageKey, s[b], `vol-${b}`, (v) => (setAudioSettings({ [b]: v }), sample(SAMPLE[b])));
     const mute = button(s.muted ? `🔇 ${t("settings.mute")}` : `🔊 ${t("settings.mute")}`, {
       w: 260,
       size: "sm",

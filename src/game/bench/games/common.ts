@@ -1,15 +1,22 @@
 /** Shared bits for the 3D bench minigames. */
-import { Color3, Color4, Plane, ParticleSystem, StandardMaterial, Vector3, type Ray, type Scene } from "@babylonjs/core";
+import { Color3, Color4, PBRMaterial, Plane, ParticleSystem, Vector3, type Ray, type Scene } from "@babylonjs/core";
 import { particleDot } from "../../../engine/textures";
 
-export function mat(scene: Scene, hex: string, o: { spec?: number; alpha?: number; emissive?: string } = {}): StandardMaterial {
-  const m = new StandardMaterial(`mg-${hex}-${Math.random().toString(36).slice(2, 6)}`, scene);
-  m.diffuseColor = Color3.FromHexString(hex);
+/**
+ * Minigame material (PBR, lit by the workshop's image-based lighting).
+ * spec: 0 matte … 1 polished metal · emissive: glow color.
+ */
+export function mat(scene: Scene, hex: string, o: { spec?: number; alpha?: number; emissive?: string } = {}): PBRMaterial {
+  const m = new PBRMaterial(`mg-${hex}-${Math.random().toString(36).slice(2, 6)}`, scene);
+  m.albedoColor = Color3.FromHexString(hex).toLinearSpace();
   const s = o.spec ?? 0.3;
-  m.specularColor = new Color3(s, s, s);
-  m.specularPower = 64;
-  if (o.alpha !== undefined) m.alpha = o.alpha;
-  if (o.emissive) m.emissiveColor = Color3.FromHexString(o.emissive);
+  m.metallic = s >= 0.85 ? 0.9 : 0;
+  m.roughness = Math.max(0.08, 0.85 - s * 0.75);
+  if (o.alpha !== undefined && o.alpha < 1) {
+    m.alpha = o.alpha;
+    m.transparencyMode = PBRMaterial.PBRMATERIAL_ALPHABLEND;
+  }
+  if (o.emissive) m.emissiveColor = Color3.FromHexString(o.emissive).toLinearSpace().scale(2);
   return m;
 }
 

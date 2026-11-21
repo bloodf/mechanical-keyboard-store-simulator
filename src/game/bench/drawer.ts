@@ -75,6 +75,7 @@ function tileControl(t0: TileSpec, w: number, h: number, prefix = "tile"): Contr
   r.isPointerBlocker = true;
   r.hoverCursor = locked ? "not-allowed" : "pointer";
   if (locked) r.alpha = 0.55;
+  else if (t0.dim) r.alpha = 0.7;
   const iconH = Math.round(h * 0.34);
   const iconBg = new Rectangle();
   iconBg.thickness = 0;
@@ -99,7 +100,7 @@ function tileControl(t0: TileSpec, w: number, h: number, prefix = "tile"): Contr
   if (t0.sub && subH > 12) r.addControl(label(t0.sub, { size: T.tiny, weight: 500, color: C.inkSoft, x: 10, y, w: w - 20, h: subH, ellipsis: true, valign: 0 }));
   if (words.length) r.addControl(label(words.join(" · "), { size: T.tiny, weight: 700, color: C.blue, x: 10, y: fxY, w: w - 20, h: 16 }));
   const price = locked ? t("bench.locked", { count: t0.lockedAt! }) : (t0.priceText ?? (t0.price ? formatMoney(t0.price) : t("bench.free")));
-  r.addControl(label(price, { size: T.small, weight: 700, color: locked ? C.inkSoft : C.good, x: 10, y: priceY, w: w - 20, h: 20 }));
+  r.addControl(label(price, { size: T.small, weight: 700, color: locked || t0.dim ? C.inkSoft : C.good, x: 10, y: priceY, w: w - 20, h: 20 }));
   if (t0.selected) {
     const check = new Rectangle();
     check.width = check.height = "26px";

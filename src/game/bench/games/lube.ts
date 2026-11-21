@@ -2,7 +2,7 @@
  * Switch lubing (3D): an exploded switch on the bench next to a lube gauge. Hold to brush lube on,
  * release in the green zone. The zone depends on the switch type (tactiles/clickies want little).
  */
-import { Mesh, MeshBuilder, StandardMaterial, TransformNode, Vector3, Color3 } from "@babylonjs/core";
+import { Color3, Mesh, MeshBuilder, PBRMaterial, TransformNode, Vector3 } from "@babylonjs/core";
 import type { Control } from "@babylonjs/gui";
 import { play } from "../../../audio/engine";
 import type { SwitchProduct } from "../../../data/catalog";
@@ -10,7 +10,7 @@ import type { SwitchType } from "../../../data/parts";
 import { t } from "../../../i18n";
 import { C, S, T } from "../../../gui/theme";
 import { button, label, stack } from "../../../gui/widgets";
-import { roundedBox } from "../../../engine/geometry";
+import { switchParts } from "../../../engine/keyboard/switchModels";
 import type { DrawerArea, StepCtx } from "../types";
 import { mat } from "./common";
 
@@ -20,10 +20,9 @@ const GAUGE_H = 0.11;
 
 export class LubeGame {
   private root: TransformNode;
-  private top: Mesh;
-  private stem: Mesh;
-  private spring: Mesh;
-  private stemMat: StandardMaterial;
+  /** The switch at 4× scale (mm → m × 4), parts by name: top, bottom, stem, spring, jacket, leaf, pins. */
+  private parts: Record<string, Mesh> = {};
+  private stemMat: PBRMaterial;
   private fillMesh: Mesh;
   private brush: TransformNode;
   private round = 0;
@@ -47,33 +46,51 @@ export class LubeGame {
     const anchor = ctx.store.layout.benchAnchor.getAbsolutePosition();
     this.root = new TransformNode("lubeGame", scene);
     this.root.position = anchor.add(new Vector3(0.03, 0.005, 0.02));
-    const housing = mat(scene, sw.housingColor, { spec: 0.5, alpha: Math.max(0.55, sw.housingOpacity) });
-    const bottom = roundedBox("swBottom", { w: 0.06, h: 0.026, d: 0.06, r: 0.006 }, scene);
-    bottom.material = housing;
-    bottom.parent = this.root;
-    bottom.position.y = 0.013;
-    // spring: helix tube
-    const path: Vector3[] = [];
-    for (let i = 0; i <= 120; i++) {
-      const a = (i / 120) * Math.PI * 2 * 7;
-      path.push(new Vector3(Math.cos(a) * 0.008, (i / 120) * 0.03, Math.sin(a) * 0.008));
+    // The real switch model, magnified 4×, opened up on the bench
+    const fam = sw.family;
+    const models = switchParts(fam);
+    const sw4 = new TransformNode("switch4x", scene);
+    sw4.parent = this.root;
+    sw4.scaling.setAll(0.004);
+    sw4.position.y = (fam === "choc" ? 5.2 : 8.4) * 0.004;
+    const clear = sw.housingOpacity < 1;
+    const pm = (hex: string, rough: number, metal = 0, alpha?: number) => {
+      const m = new PBRMaterial(`lube-${hex}`, scene);
+      m.albedoColor = Color3.FromHexString(hex).toLinearSpace();
+      m.roughness = rough;
+      m.metallic = metal;
+      if (alpha !== undefined && alpha < 1) {
+        m.alpha = alpha;
+        m.transparencyMode = PBRMaterial.PBRMATERIAL_ALPHABLEND;
+      }
+      return m;
+    };
+    const housing = pm(sw.housingColor, clear ? 0.08 : 0.42, 0, clear ? Math.max(0.45, sw.housingOpacity) : undefined);
+    const bottomM = pm(sw.bottomColor ?? sw.housingColor, clear ? 0.1 : 0.45, 0, clear ? 0.6 : undefined);
+    this.stemMat = pm(sw.stemColor, 0.5);
+    const steel = pm("#c9ccd1", 0.18, 1);
+    const gold = pm("#d9b458", 0.25, 1);
+    const kind = fam === "choc" && sw.type === "silent" ? "linear" : sw.type;
+    const want: [string, string, PBRMaterial][] = [
+      ["top", "top", housing],
+      ["bottom", fam === "choc" ? "bottom" : "bottom5", bottomM],
+      ["stem", `stem_${kind}`, this.stemMat],
+      ["spring", "spring", steel],
+      ["pins", "pins", gold],
+    ];
+    if (fam !== "choc") want.push(["leaf", "leaf", steel]);
+    if (fam === "box") want.push(["box", "box", this.stemMat]);
+    if (kind === "clicky" && fam !== "choc") want.push(["jacket", "jacket", pm("#f6f6f6", 0.4)]);
+    for (const [key, name, m] of want) {
+      const vd = models?.[name];
+      if (!vd) continue;
+      const mesh = new Mesh(`lube-${key}`, scene);
+      vd.applyToMesh(mesh);
+      mesh.material = m;
+      mesh.parent = sw4;
+      mesh.isPickable = false;
+      this.parts[key] = mesh;
     }
-    this.spring = MeshBuilder.CreateTube("spring", { path, radius: 0.0009, tessellation: 6 }, scene);
-    this.spring.material = mat(scene, "#c9ccd1", { spec: 0.9 });
-    this.spring.parent = this.root;
-    this.spring.position.y = 0.028;
-    this.stemMat = mat(scene, sw.stemColor, { spec: 0.3 });
-    const s1 = MeshBuilder.CreateBox("s1", { width: 0.026, height: 0.016, depth: 0.026 }, scene);
-    const s2 = MeshBuilder.CreateBox("s2", { width: 0.012, height: 0.014, depth: 0.004 }, scene);
-    s2.position.y = 0.014;
-    const s3 = MeshBuilder.CreateBox("s3", { width: 0.004, height: 0.014, depth: 0.012 }, scene);
-    s3.position.y = 0.014;
-    this.stem = Mesh.MergeMeshes([s1, s2, s3], true)!;
-    this.stem.material = this.stemMat;
-    this.stem.parent = this.root;
-    this.top = roundedBox("swTop", { w: 0.062, h: 0.02, d: 0.062, r: 0.006 }, scene);
-    this.top.material = housing;
-    this.top.parent = this.root;
     // Gauge (glass tube + fill + green zone)
     const gx = -0.085;
     const glass = MeshBuilder.CreateCylinder("gaugeGlass", { diameter: 0.018, height: GAUGE_H, tessellation: 24 }, scene);
@@ -116,19 +133,21 @@ export class LubeGame {
     return 0.42 * (1 + this.round * 0.16);
   }
 
+  /** spread 1 = opened (exploded view), 0 = closed. Offsets in real mm. */
   private layoutParts(spread: number) {
-    this.spring.scaling.y = 0.5 + 0.5 * spread;
-    this.stem.position.y = 0.03 + 0.03 * spread;
-    this.top.position.y = 0.036 + 0.05 * spread;
+    const off: Record<string, number> = { spring: 5, stem: 12, jacket: 12, box: 22, top: 22 };
+    for (const [k, m] of Object.entries(this.parts)) m.position.y = (off[k] ?? 0) * spread;
   }
 
   private setFill(f: number) {
     this.fill = f;
     this.fillMesh.scaling.y = Math.max(0.01, f);
     this.fillMesh.position.y = (f * GAUGE_H) / 2;
-    (this.fillMesh.material as StandardMaterial).diffuseColor = Color3.FromHexString(f > this.zone[1] ? "#e23b4e" : "#ff7a45");
-    this.stemMat.specularColor = new Color3(0.3 + f, 0.3 + f, 0.3 + f);
-    this.stemMat.specularPower = 16 + f * 200;
+    (this.fillMesh.material as PBRMaterial).albedoColor = Color3.FromHexString(f > this.zone[1] ? "#e23b4e" : "#ff7a45").toLinearSpace();
+    // lube makes the stem glossy
+    this.stemMat.roughness = Math.max(0.08, 0.5 - f * 0.45);
+    this.stemMat.clearCoat.isEnabled = f > 0.05;
+    this.stemMat.clearCoat.intensity = Math.min(1, f * 1.5);
   }
 
   private updateCounter() {
@@ -215,7 +234,7 @@ export class LubeGame {
   update() {
     if (this.holding) {
       this.setFill(this.current());
-      this.brush.position.set(0.018 + Math.sin(performance.now() / 40) * 0.006, 0.062, 0.012);
+      this.brush.position.set(0.012 + Math.sin(performance.now() / 40) * 0.006, 0.085, 0.014);
       this.brush.setEnabled(true);
       if (performance.now() - this.lastBrush > 140) {
         this.lastBrush = performance.now();

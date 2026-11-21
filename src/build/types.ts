@@ -1,5 +1,6 @@
 import type { VoiceParams } from "../audio/voice";
 import type { LayoutId } from "../data/layouts";
+import type { KeycapProfile, SwitchFamily } from "../data/profiles";
 import type { CaseMaterial, DampDef, HueName, PcbDef, PlateDef, StabDef, StabMod } from "../data/parts";
 import type { ColorFamily, Colorway } from "../data/colorway";
 
@@ -41,6 +42,25 @@ export interface JobRequest {
   budget: number; // cents — what the customer pays
   picky: number; // 0 relaxed … 1 very picky (scales how much misses hurt)
   quote: QuoteLine[];
+  /** Explicit part wishes (checked by the "spec" score). */
+  wants?: Wants;
+}
+
+export interface Wants {
+  profile?: KeycapProfile;
+  lowProfile?: boolean; // Choc switches + low-profile caps
+  hotswap?: boolean;
+  caseMaterial?: CaseMaterial;
+}
+
+export type OrderKind = "build" | "membrane";
+
+/** A client order in the workshop's inbox. Days are 1-based game days. */
+export interface Order extends JobRequest {
+  kind: OrderKind;
+  received: number; // day it arrived
+  expires: number; // last day it can be accepted
+  due: number; // delivery deadline (day, end of day)
 }
 
 export type StepId =
@@ -67,7 +87,7 @@ export interface FaultyKey {
 
 /** Everything about the keyboard being built. Plain JSON: saved with the game. */
 export interface BuildSession {
-  job: JobRequest;
+  job: Order;
   step: StepId;
   layout: LayoutId | null;
   caseMaterial: CaseMaterial | null;
@@ -90,4 +110,8 @@ export interface BuildSession {
   keycapsId: string | null;
   tested: boolean;
   soundChecked: boolean;
+  /** Stock taken for this build (SKU → count); returned if the build is abandoned. */
+  reserved: Record<string, number>;
+  /** Switch family, set by the PCB footprint / switch choice. */
+  family: SwitchFamily | null;
 }

@@ -1,27 +1,31 @@
 /**
- * Workbench mode (first person): top bar with steps, the job ticket, and a bottom parts drawer.
+ * The workbench: the keyboard being built, the step bar, the order ticket and the parts drawer.
+ * When nothing is on the bench it shows the accepted orders you can start.
  * Routes 3D pointer + keyboard input to the active step and saves after every change.
  */
-import { PointerEventTypes, type Observer, type PointerInfo } from "@babylonjs/core";
+import { PointerEventTypes, type Observer, type PointerInfo, type Scene } from "@babylonjs/core";
 import { play } from "../../audio/engine";
 import { KEY_PRESETS } from "../../audio/keyPress";
 import { computeProfile } from "../../build/profile";
 import { evaluateBuild, type BuildResult } from "../../build/scoring";
 import { canGoBack, nextStep, prevStep, stepDone, stepsFor } from "../../build/session";
+import { give } from "../../build/stock";
 import type { BuildSession, StepId } from "../../build/types";
-import { HISTORY_MAX, type GameState } from "../../core/state";
+import { abandonBuild, formatClock, release, reserve, shipBuild, startBuild, stepMinutes, swapReserved, type ShipOutcome } from "../../build/workshop";
+import { nowAbs, type GameState } from "../../core/state";
 import type { Catalog } from "../../data/catalog";
 import { needsStab } from "../../data/layouts";
 import { Board } from "../../engine/keyboard/board";
-import type { StoreScene } from "../../engine/store/storeScene";
-import { formatMoney, t, type MessageKey } from "../../i18n";
+import type { WorkshopScene } from "../../engine/workshop/workshopScene";
+import { t, type MessageKey } from "../../i18n";
 import { C, R, S, T } from "../../gui/theme";
 import type { Ui } from "../../gui/ui";
 import { button, chip, group, H_CENTER, H_RIGHT, label, panel, stack, V_BOTTOM } from "../../gui/widgets";
+import { orderCard } from "../orderCard";
 import { caseStep, dampStep, installStep, keycapStep, lubeStep, pcbStep, plateStep, screwStep, solderStep, soundStep, stabStep, switchStep, testStep } from "./steps";
 import { syncBoard } from "./sync";
 import { ticketPanel } from "./ticket";
-import type { StepCtx, StepView } from "./types";
+import type { StepCtx, StepView, SupplierPreset } from "./types";
 
 const ICON: Record<StepId, string> = {
   case: "🧱",
@@ -41,51 +45,58 @@ const ICON: Record<StepId, string> = {
 };
 
 export interface BenchOpts {
-  store: StoreScene;
+  ws: WorkshopScene;
   state: GameState;
   catalog: Catalog;
   builds: () => number;
+  /** Height of the HUD bar (ideal px) so the bench UI starts below it. */
+  hudHeight: () => number;
   persist: () => void;
   wake: () => void;
-  onExit: () => void;
-  onDelivered: (b: BuildSession, r: BuildResult) => void;
-  onNeedJob: () => void;
+  /** Time passes while you work. */
+  onWork: (minutes: number) => void;
+  /** Skip ahead until the next express delivery arrives. */
+  onWaitCourier: () => void;
+  onShipped: (b: BuildSession, r: BuildResult, o: ShipOutcome) => void;
+  openSuppliers: (p: SupplierPreset) => void;
+  openOrders: () => void;
 }
 
 export class BenchMode {
   private ui: Ui;
-  private board: Board | null = null;
+  board: Board | null = null;
   private view: StepView | null = null;
   private ticketOpen: boolean;
   private pointerObs: Observer<PointerInfo> | null = null;
   private keyFn = (e: KeyboardEvent) => this.onKey(e);
   private offResize: () => void;
-  private beforeRender: Observer<import("@babylonjs/core").Scene> | null = null;
+  private beforeRender: Observer<Scene> | null = null;
   private flashNext = false;
+  /** Hidden while a full-screen panel (orders, suppliers…) is open. */
+  private hidden = false;
 
   constructor(private o: BenchOpts) {
-    this.ui = o.store.ui;
+    this.ui = o.ws.ui;
     this.ticketOpen = !this.ui.portrait;
-    o.store.setMode("bench");
     const s = o.state.activeBuild;
     if (s?.layout) this.makeBoard(s);
-    this.pointerObs = o.store.scene.onPointerObservable.add((pi) => {
+    this.pointerObs = o.ws.scene.onPointerObservable.add((pi) => {
       const e = pi.event as PointerEvent;
       const type = pi.type === PointerEventTypes.POINTERDOWN ? "down" : pi.type === PointerEventTypes.POINTERMOVE ? "move" : pi.type === PointerEventTypes.POINTERUP ? "up" : null;
-      if (!type || !this.view?.onPointer) return;
-      const rect = o.store.scene.getEngine().getRenderingCanvas()!.getBoundingClientRect();
+      if (!type || !this.view?.onPointer || this.hidden) return;
+      const rect = o.ws.scene.getEngine().getRenderingCanvas()!.getBoundingClientRect();
       this.view.onPointer(type, e.clientX - rect.left, e.clientY - rect.top, e);
     });
     window.addEventListener("keydown", this.keyFn);
     window.addEventListener("keyup", this.keyFn);
-    this.beforeRender = o.store.scene.onBeforeRenderObservable.add(() => {
-      const dt = o.store.scene.getEngine().getDeltaTime() / 1000;
+    this.beforeRender = o.ws.scene.onBeforeRenderObservable.add(() => {
+      const dt = o.ws.scene.getEngine().getDeltaTime() / 1000;
       this.board?.update(dt);
       this.view?.update?.(dt);
     });
     this.offResize = this.ui.onResize(() => this.render());
     if (s) this.openStep(s.step);
-    else this.renderNoJob();
+    else this.render();
   }
 
   get session(): BuildSession | null {
@@ -94,19 +105,20 @@ export class BenchMode {
 
   private makeBoard(s: BuildSession) {
     this.board?.dispose();
-    this.board = new Board(this.o.store.scene, s.layout!, this.o.store.shadows);
-    this.board.root.parent = this.o.store.layout.benchAnchor;
+    this.board = new Board(this.o.ws.scene, s.layout!, this.o.ws.shadows);
+    this.board.base.parent = this.o.ws.benchAnchor;
     syncBoard(this.board, s, this.o.catalog);
-    this.o.store.setBenchView("overview", { w: this.board.outerWidth, d: this.board.outerDepth });
+    this.o.ws.setBenchView("overview", { w: this.board.outerWidth, d: this.board.outerDepth });
     return this.board;
   }
 
   private ctx(): StepCtx {
     const self = this;
+    const st = this.o.state;
     return {
-      state: this.o.state,
+      state: st,
       catalog: this.o.catalog,
-      store: this.o.store,
+      store: this.o.ws,
       ui: this.ui,
       get session() {
         return self.session!;
@@ -122,10 +134,17 @@ export class BenchMode {
       rerender: () => this.render(),
       keySound: (id, animate = true) => this.keySound(id, animate),
       view: (v) => {
-        if (typeof v === "string") this.o.store.setBenchView(v, this.board ? { w: this.board.outerWidth, d: this.board.outerDepth } : undefined);
-        else this.o.store.setBenchView(v);
+        if (typeof v === "string") this.o.ws.setBenchView(v, this.board ? { w: this.board.outerWidth, d: this.board.outerDepth } : undefined);
+        else this.o.ws.setBenchView(v);
       },
       wake: this.o.wake,
+      stock: (sku) => st.inventory[sku] ?? 0,
+      skus: (prefix) => Object.keys(st.inventory).filter((k) => k.startsWith(prefix) && st.inventory[k] > 0),
+      reserve: (sku, n = 1) => reserve(st, sku, n),
+      release: (sku, n = 1) => release(st, sku, n),
+      swap: (a, b, n = 1) => swapReserved(st, a, b, n),
+      openSuppliers: (p) => this.o.openSuppliers(p),
+      devGive: (sku, n = 1) => give(st.inventory, sku, n),
     };
   }
 
@@ -144,7 +163,7 @@ export class BenchMode {
   }
 
   private onKey(e: KeyboardEvent) {
-    if (this.ui.adt.focusedControl) return;
+    if (this.ui.adt.focusedControl || this.hidden) return;
     this.view?.onKey?.(e);
   }
 
@@ -153,7 +172,11 @@ export class BenchMode {
     this.view?.dispose?.();
     this.view = null;
     b.step = step;
-    if (step === "deliver") return this.deliver();
+    if (step === "deliver") {
+      this.render();
+      this.o.persist();
+      return;
+    }
     const ctx = this.ctx();
     const f: Record<Exclude<StepId, "deliver">, () => StepView> = {
       case: () => caseStep(ctx),
@@ -183,38 +206,44 @@ export class BenchMode {
     this.o.persist();
   }
 
+  /** Hide the bench UI while a full panel covers the screen. */
+  setHidden(h: boolean) {
+    this.hidden = h;
+    this.render();
+  }
+
   // ---------------- Layout ----------------
-  private render() {
+  render() {
     const ui = this.ui;
+    if (this.hidden) {
+      ui.setScreen(group({ name: "bench-ui" }));
+      return;
+    }
     const b = this.session;
-    if (!b) return this.renderNoJob();
+    if (!b) return this.renderIdle();
+    if (b.step === "deliver") return this.renderShip();
     const portrait = ui.portrait;
     const root = group({ name: "bench-ui" });
-    root.isPointerBlocker = false;
-    // Top bar
-    root.addControl(button(`← ${t("bench.leave")}`, { w: portrait ? 110 : 170, h: 44, size: "sm", x: S.lg, y: S.lg, testId: "bench-leave", onClick: () => this.exit() }));
-    const money = chip(formatMoney(this.o.state.money), { ha: H_RIGHT, x: -S.lg, y: S.lg + 4, bg: C.paper, color: C.good, size: T.h3, h: 40, name: "bench-money" });
-    root.addControl(money);
+    const top0 = this.o.hudHeight();
     const steps = stepsFor(b);
     const cur = steps.indexOf(b.step);
-    const stepBar = stack({ horizontal: true, h: 34, spacing: 4, y: portrait ? S.lg + 52 : S.lg + 5, ha: H_CENTER });
-    // On phones show a window of steps around the current one.
+    const stepBar = stack({ horizontal: true, h: 32, spacing: 4, y: top0 + S.sm, ha: H_CENTER });
     const lo = portrait ? Math.max(0, Math.min(cur - 3, steps.length - 8)) : 0;
     const hi = portrait ? lo + 8 : steps.length;
     steps.forEach((st, i) => {
       if (i < lo || i >= hi) return;
       const done = i < cur;
       const now = i === cur;
-      const text = now || !portrait ? `${done ? "✓" : ICON[st]}${now || !portrait ? " " + t(`step.${st}.title` as MessageKey) : ""}` : done ? "✓" : ICON[st];
       const showText = now || (!portrait && ui.W > 1500);
-      stepBar.addControl(chip(showText ? text : done ? "✓" : ICON[st], { bg: now ? C.accent : done ? C.goodSoft : "rgba(255,250,242,0.85)", color: now ? C.white : done ? C.good : C.inkSoft, size: T.tiny + 1, h: 30, pad: 10 }));
+      const text = showText ? `${done ? "✓" : ICON[st]} ${t(`step.${st}.title` as MessageKey)}` : done ? "✓" : ICON[st];
+      stepBar.addControl(chip(text, { bg: now ? C.accent : done ? C.goodSoft : "rgba(255,250,242,0.88)", color: now ? C.white : done ? C.good : C.inkSoft, size: T.tiny + 1, h: 28, pad: 10 }));
     });
     root.addControl(stepBar);
-    const topInset = portrait ? S.lg + 92 : S.lg + 56;
+    const topInset = top0 + S.sm + 40;
     // Drawer
     const compact = !!this.view?.compact;
     const dw = Math.min(ui.W - 2 * S.md, 1180);
-    const dh = portrait ? (compact ? 260 : 360) : compact ? 220 : 300;
+    const dh = portrait ? (compact ? 260 : 360) : compact ? 210 : 300;
     const drawer = panel({ w: dw, h: dh, y: -S.md, ha: H_CENTER, va: V_BOTTOM, radius: R.xl, name: "drawer" });
     const pad = portrait ? S.md : S.xl;
     const inner = dw - 2 * pad;
@@ -229,38 +258,42 @@ export class BenchMode {
     // footer
     const done = stepDone(b, b.step);
     const next = nextStep(b);
-    const isLast = next === "deliver";
     const prev = prevStep(b);
+    void next;
     const foot = stack({ horizontal: true, h: 52, spacing: S.sm, x: -pad, y: -S.md, ha: H_RIGHT, va: V_BOTTOM });
     if (prev && canGoBack(b)) foot.addControl(button(`← ${t("bench.back")}`, { w: portrait ? 100 : 140, testId: "btn-back", onClick: () => (play("ui.back"), this.openStep(prev)) }));
-    const nextBtn = button(isLast ? (portrait ? `📦 ${t("step.deliver.title")}` : t("bench.deliver", { name: b.job.customer.name.split(" ")[0] })) : `${t("bench.next")} →`, {
+    const mins = stepMinutes(b, b.step);
+    const nextBtn = button(`${t("bench.next")} →`, {
       w: portrait ? 170 : 230,
       variant: "primary",
       disabled: !done,
       testId: "btn-next",
-      onClick: () => {
-        play(isLast ? "money.register" : "ui.confirm");
-        this.openStep(next);
-      },
+      sub: mins ? `⏱ ${t("bench.minutes", { min: mins })}` : undefined,
+      onClick: () => this.finishStep(),
     });
     if (this.flashNext && done) nextBtn.scaleX = nextBtn.scaleY = 1.06;
     foot.addControl(nextBtn);
     drawer.addControl(foot);
-    drawer.addControl(button(portrait ? "✕" : t("bench.abandon"), { w: portrait ? 44 : 140, h: 40, size: "sm", variant: "ghost", x: pad - 8, y: -S.md - 6, va: V_BOTTOM, testId: "btn-abandon", onClick: () => this.confirmAbandon() }));
+    const left = stack({ horizontal: true, h: 44, spacing: S.sm, x: pad - 8, y: -S.md - 6, va: V_BOTTOM });
+    left.addControl(button(portrait ? "⏸" : t("bench.putAside"), { w: portrait ? 44 : 140, h: 40, size: "sm", variant: "ghost", testId: "btn-abandon", onClick: () => this.confirmAside() }));
+    const courier = this.nextCourier();
+    if (courier !== null && !portrait)
+      left.addControl(button(`⏳ ${t("bench.waitCourier", { time: formatClock(courier % 1440) })}`, { w: 260, h: 40, size: "sm", variant: "secondary", testId: "btn-wait", onClick: () => this.o.onWaitCourier() }));
+    drawer.addControl(left);
     root.addControl(drawer);
     // Ticket (left) or a chip that opens it
-    let left = 0;
+    let leftInset = 0;
     if (this.ticketOpen && !portrait) {
       const tw = 300;
       const th = Math.min(ui.H - topInset - dh - 3 * S.md, 600);
       if (th > 220) {
-        const tp = ticketPanel(b.job, b, this.o.catalog, { w: tw, h: th, onHide: () => ((this.ticketOpen = false), this.render()) });
+        const tp = ticketPanel(b.job, b, this.o.catalog, { w: tw, h: th, day: this.o.state.day, onHide: () => ((this.ticketOpen = false), this.render()) });
         tp.left = `${S.lg}px`;
         tp.top = `${topInset}px`;
         tp.horizontalAlignment = 0;
         tp.verticalAlignment = 0;
         root.addControl(tp);
-        left = tw + S.lg;
+        leftInset = tw + S.lg;
       }
     } else {
       root.addControl(
@@ -278,7 +311,7 @@ export class BenchMode {
               return;
             }
             this.ui.modal({ w: 420, h: 640, name: "ticket-modal", dismissable: true }, (p, close) => {
-              const tp = ticketPanel(b.job, b, this.o.catalog, { w: Math.min(420, ui.W - 24), h: Math.min(640, ui.H - 24), onHide: close });
+              const tp = ticketPanel(b.job, b, this.o.catalog, { w: Math.min(420, ui.W - 24), h: Math.min(640, ui.H - 24), day: this.o.state.day, onHide: close });
               tp.shadowBlur = 0;
               p.addControl(tp);
             });
@@ -287,97 +320,142 @@ export class BenchMode {
       );
     }
     ui.setScreen(root);
-    // Tell the camera what's covered (CSS px)
-    const canvas = this.o.store.scene.getEngine().getRenderingCanvas()!;
-    const k = canvas.clientHeight / ui.H;
-    this.o.store.setInsets(left * k, topInset * k, (dh + S.md) * k, 0);
+    this.setInsets(leftInset, topInset, dh + S.md);
     this.o.wake();
   }
 
-  private renderNoJob() {
+  private setInsets(left: number, top: number, bottom: number) {
+    const canvas = this.o.ws.scene.getEngine().getRenderingCanvas()!;
+    const k = canvas.clientHeight / this.ui.H;
+    this.o.ws.setInsets(left * k, top * k, bottom * k, 0);
+  }
+
+  /** Absolute minute of the next express delivery, if any is on the way. */
+  private nextCourier(): number | null {
+    const now = nowAbs(this.o.state);
+    const t0 = this.o.state.shipments.filter((s) => s.express && s.arrives > now).map((s) => s.arrives);
+    return t0.length ? Math.min(...t0) : null;
+  }
+
+  private finishStep() {
+    const b = this.session!;
+    if (!stepDone(b, b.step)) return;
+    const mins = stepMinutes(b, b.step);
+    const next = nextStep(b);
+    play("ui.confirm");
+    this.openStep(next);
+    this.o.onWork(mins);
+  }
+
+  /** Nothing on the bench: accepted orders to start. */
+  private renderIdle() {
     const ui = this.ui;
     const root = group({ name: "bench-ui" });
-    root.isPointerBlocker = false;
-    const p = panel({ w: Math.min(520, ui.W - 32), h: 230, y: -S.xl, ha: H_CENTER, va: V_BOTTOM, radius: R.xl, name: "bench-nojob" });
-    const col = stack({ w: "86%", y: S.xl, ha: H_CENTER, spacing: S.sm });
-    col.addControl(label(t("bench.noJobTitle"), { size: T.h2, weight: 700, align: H_CENTER }));
-    col.addControl(label(t("bench.noJobBody"), { size: T.body, color: C.inkSoft, wrap: true, align: H_CENTER }));
-    p.addControl(col);
+    const acc = this.o.state.accepted;
+    const w = Math.min(ui.W - 2 * S.md, 980);
+    const cardH = 168;
+    const h = acc.length ? Math.min(ui.H - this.o.hudHeight() - 40, 120 + Math.ceil(acc.length / 2) * (cardH + S.md)) : 200;
+    const p = panel({ w, h, y: -S.lg, ha: H_CENTER, va: V_BOTTOM, radius: R.xl, name: "bench-idle" });
+    p.addControl(label(`🛠 ${t("ws.benchFree")}`, { size: T.h2, weight: 700, x: S.xl, y: S.lg, h: 34 }));
+    p.addControl(label(acc.length ? t("ws.benchFreeBody") : t("ws.benchEmptyBody"), { size: T.body, color: C.inkSoft, x: S.xl, y: S.lg + 36, h: 24, w: w - 2 * S.xl - 200 }));
+    p.addControl(button(`📋 ${t("ws.openOrders")}`, { w: 190, h: 46, size: "sm", x: -S.xl, y: S.lg, ha: H_RIGHT, testId: "bench-orders", onClick: () => this.o.openOrders() }));
+    const cw = ui.portrait ? w - 2 * S.lg : (w - 2 * S.xl - S.md) / 2;
+    acc.forEach((o, i) => {
+      const c = orderCard(o, {
+        w: cw,
+        h: cardH,
+        state: this.o.state,
+        catalog: this.o.catalog,
+        compact: true,
+        actions: [{ text: `▶ ${t("ws.start")}`, variant: "primary", testId: `start-${o.id}`, onClick: () => this.start(o.id) }],
+      });
+      c.left = `${S.xl + (ui.portrait ? 0 : (i % 2) * (cw + S.md))}px`;
+      c.top = `${100 + (ui.portrait ? i : Math.floor(i / 2)) * (cardH + S.md)}px`;
+      p.addControl(c);
+    });
+    root.addControl(p);
+    ui.setScreen(root);
+    this.setInsets(0, this.o.hudHeight(), h + S.lg);
+    this.o.ws.setBenchView("overview", { w: 0.45, d: 0.16 });
+  }
+
+  start(orderId: string) {
+    if (!startBuild(this.o.state, orderId)) return;
+    play("ui.confirm");
+    this.o.persist();
+    this.openStep("case");
+  }
+
+  /** Last step: pack & ship. */
+  private renderShip() {
+    const ui = this.ui;
+    const b = this.session!;
+    const root = group({ name: "bench-ui" });
+    const w = Math.min(ui.W - 2 * S.md, 560);
+    const p = panel({ w, h: 190, y: -S.lg, ha: H_CENTER, va: V_BOTTOM, radius: R.xl, name: "drawer" });
+    p.addControl(label(`📦 ${t("step.deliver.title")}`, { size: T.h2, weight: 700, x: S.xl, y: S.lg, h: 34 }));
+    p.addControl(label(t("step.deliver.hint"), { size: T.body, color: C.inkSoft, x: S.xl, y: S.lg + 38, h: 24, w: w - 2 * S.xl }));
     const row = stack({ horizontal: true, h: 56, spacing: S.md, y: -S.lg, ha: H_CENTER, va: V_BOTTOM });
-    row.addControl(button(t("bench.leave"), { w: 180, testId: "bench-leave", onClick: () => this.exit() }));
-    row.addControl(button(t("bench.openJobs"), { w: 220, variant: "primary", testId: "bench-jobs", onClick: () => this.o.onNeedJob() }));
+    row.addControl(button(`← ${t("bench.back")}`, { w: 130, testId: "btn-back", onClick: () => this.openStep(prevStep(b)!) }));
+    row.addControl(button(t("bench.ship", { name: b.job.customer.name.split(" ")[0] }), { w: 300, variant: "primary", testId: "btn-next", sub: `⏱ ${t("bench.minutes", { min: stepMinutes(b, "deliver") })}`, onClick: () => this.ship() }));
     p.addControl(row);
     root.addControl(p);
     ui.setScreen(root);
-    this.o.store.setInsets(0, 0, 260 * ((this.o.store.scene.getEngine().getRenderingCanvas()!.clientHeight || 800) / ui.H), 0);
+    this.setInsets(0, this.o.hudHeight(), 190 + S.lg);
+    this.o.ws.setBenchView("overview", this.board ? { w: this.board.outerWidth, d: this.board.outerDepth } : undefined);
   }
 
-  private confirmAbandon() {
-    this.ui.confirm(t("bench.confirmAbandon"), t("bench.confirmAbandonYes"), t("bench.confirmAbandonNo"), () => {
-      const s = this.o.state;
-      const job = s.activeBuild?.job;
-      s.activeBuild = null;
-      if (job) s.jobBoard.unshift(job);
-      s.jobBoard = s.jobBoard.slice(0, 3);
-      this.o.store.customerLeave("sad", "idle");
-      this.board?.dispose();
-      this.board = null;
-      play("ui.back");
-      this.o.persist();
-      this.exit();
-    }, "confirm-abandon");
-  }
-
-  private deliver() {
+  private ship() {
     const b = this.session!;
     const r = evaluateBuild(b, this.o.catalog);
-    const s = this.o.state;
-    s.money += r.pay + r.tip - r.partsCost;
-    s.reputation = Math.max(0, Math.min(500, s.reputation + r.repDelta));
-    s.stats.keyboardsBuilt++;
-    s.stats.customersServed++;
-    if (r.stars === 5) s.stats.perfectBuilds++;
-    if (r.stars <= 2) s.stats.angryCustomers++;
-    s.stats.totalProfit += r.profit;
-    s.history.unshift({ jobId: b.job.id, customer: b.job.customer.name, layout: b.layout!, stars: r.stars, profit: r.profit, day: s.day });
-    s.history = s.history.slice(0, HISTORY_MAX);
-    s.activeBuild = null;
+    const outcome = shipBuild(this.o.state, r);
+    play("money.register");
     this.o.persist();
-    // celebration wave on the finished board
     const board = this.board;
-    if (board && r.stars >= 4) board.layout.keys.forEach((k, i) => setTimeout(() => (board.pressKey(k.id), this.o.wake()), i * 15));
+    if (board && outcome.stars >= 4) board.layout.keys.forEach((k, i) => setTimeout(() => (board.pressKey(k.id), this.o.wake()), i * 15));
     this.ui.setScreen(group({ name: "bench-ui" }));
-    this.o.onDelivered(b, r);
+    this.o.onShipped(b, r, outcome);
+    this.o.onWork(stepMinutes(b, "deliver"));
+  }
+
+  private confirmAside() {
+    this.ui.confirm(t("bench.confirmAside"), t("bench.confirmAsideYes"), t("bench.confirmAbandonNo"), () => {
+      abandonBuild(this.o.state);
+      this.clearBoard();
+      this.view?.dispose?.();
+      this.view = null;
+      play("ui.back");
+      this.o.persist();
+      this.render();
+    }, "confirm-abandon");
   }
 
   /** Dev/test: finish the current step with a good result. */
   autoStep() {
     const b = this.session;
-    if (!b || !this.view) return;
+    if (!b) return;
+    if (b.step === "deliver") return this.ship();
+    if (!this.view) return;
     this.view.auto?.();
-    if (stepDone(b, b.step)) this.openStep(nextStep(b));
+    if (stepDone(b, b.step)) this.finishStep();
   }
 
-  exit() {
-    this.dispose();
-    this.o.onExit();
+  /** After shipping: clear the bench and show the orders again. */
+  clearBoard() {
+    this.board?.dispose();
+    this.board = null;
   }
 
   dispose() {
     this.view?.dispose?.();
     this.view = null;
-    if (this.pointerObs) this.o.store.scene.onPointerObservable.remove(this.pointerObs);
-    if (this.beforeRender) this.o.store.scene.onBeforeRenderObservable.remove(this.beforeRender);
+    this.board?.dispose();
+    this.board = null;
+    if (this.pointerObs) this.o.ws.scene.onPointerObservable.remove(this.pointerObs);
+    if (this.beforeRender) this.o.ws.scene.onBeforeRenderObservable.remove(this.beforeRender);
     window.removeEventListener("keydown", this.keyFn);
     window.removeEventListener("keyup", this.keyFn);
     this.offResize();
-    this.o.store.setInsets(0, 0, 0, 0);
-  }
-
-  /** Keep the finished board on the bench for a moment after delivery; then clear it. */
-  clearBoard() {
-    this.board?.dispose();
-    this.board = null;
+    this.o.ws.setInsets(0, 0, 0, 0);
   }
 }
-

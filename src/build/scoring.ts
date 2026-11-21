@@ -3,11 +3,25 @@ import type { Catalog } from "../data/catalog";
 import type { HueName } from "../data/parts";
 import { classifyColor } from "../data/color";
 import { computeProfile, feelMatch, keycapSetOf, layoutMatches, partsCost, soundMatch } from "./profile";
-import type { BuildSession, ThemeReq } from "./types";
+import type { BuildSession, ThemeReq, Wants } from "./types";
+import { PCBS } from "../data/parts";
+import type { KeycapSet } from "../data/catalog";
+
+/** How many of the client's explicit wishes the build fulfils (1 = all, or none asked). */
+export function specMatch(w: Wants | undefined, b: BuildSession, kc: KeycapSet | undefined): number {
+  if (!w) return 1;
+  const checks: boolean[] = [];
+  if (w.profile) checks.push(kc?.profile === w.profile);
+  if (w.lowProfile) checks.push(b.family === "choc");
+  if (w.hotswap) checks.push(PCBS.find((p) => p.id === b.pcb)?.hotswap ?? false);
+  if (w.caseMaterial) checks.push(b.caseMaterial === w.caseMaterial);
+  if (!checks.length) return 1;
+  return checks.filter(Boolean).length / checks.length;
+}
 import type { Colorway } from "../data/colorway";
 
-export type ScoreComponent = "layout" | "sound" | "feel" | "theme" | "quality";
-export const WEIGHTS: Record<ScoreComponent, number> = { layout: 0.2, sound: 0.35, feel: 0.15, theme: 0.15, quality: 0.15 };
+export type ScoreComponent = "layout" | "sound" | "feel" | "theme" | "quality" | "spec";
+export const WEIGHTS: Record<ScoreComponent, number> = { layout: 0.2, sound: 0.3, feel: 0.14, theme: 0.13, quality: 0.13, spec: 0.1 };
 export type Mood = "ecstatic" | "happy" | "meh" | "annoyed" | "furious";
 
 export interface BuildResult {
@@ -68,6 +82,7 @@ export function evaluateBuild(b: BuildSession, cat: Catalog): BuildResult {
     feel: feelMatch(feel, b.job.feel),
     theme: themeMatch(b.job.theme, kc?.colorway, caseHue),
     quality,
+    spec: specMatch(b.job.wants, b, kc),
   };
   const total = (Object.keys(WEIGHTS) as ScoreComponent[]).reduce((s, k) => s + WEIGHTS[k] * scores[k], 0);
 
@@ -76,6 +91,7 @@ export function evaluateBuild(b: BuildSession, cat: Catalog): BuildResult {
   let stars = total >= 0.93 + shift ? 5 : total >= 0.8 + shift ? 4 : total >= 0.64 + shift ? 3 : total >= 0.47 + shift ? 2 : 1;
   if (scores.layout === 0) stars = Math.min(stars, 2); // "That's not the keyboard I asked for!"
   if (unresolved > 0) stars = Math.min(stars, 3);
+  if (scores.spec < 0.5) stars = Math.min(stars, 3); // "I specifically asked for…"
 
   const worst = (Object.keys(scores) as ScoreComponent[]).reduce((w, k) => (scores[k] * WEIGHTS[k] < scores[w] * WEIGHTS[w] ? k : w), "sound");
   const mood: Mood = stars === 5 ? "ecstatic" : stars === 4 ? "happy" : stars === 3 ? "meh" : stars === 2 ? "annoyed" : "furious";

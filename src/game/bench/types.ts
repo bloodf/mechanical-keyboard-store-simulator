@@ -4,7 +4,16 @@ import type { GameState } from "../../core/state";
 import type { Catalog } from "../../data/catalog";
 import type { SoundMods } from "../../data/parts";
 import type { Board } from "../../engine/keyboard/board";
-import type { BenchView, StoreScene } from "../../engine/store/storeScene";
+import type { BenchView, WorkshopScene } from "../../engine/workshop/workshopScene";
+import type { Footprint, SkuKind } from "../../build/stock";
+import type { LayoutId } from "../../data/layouts";
+
+/** Which supplier tab to open (with filters) when the player needs to buy something. */
+export interface SupplierPreset {
+  tab: SkuKind;
+  layout?: LayoutId;
+  fp?: Footprint;
+}
 import type { Painter } from "../../gui/widgets";
 import type { Ui } from "../../gui/ui";
 
@@ -12,7 +21,7 @@ import type { Ui } from "../../gui/ui";
 export interface StepCtx {
   state: GameState;
   catalog: Catalog;
-  store: StoreScene;
+  store: WorkshopScene;
   ui: Ui;
   session: BuildSession;
   builds: number;
@@ -26,6 +35,17 @@ export interface StepCtx {
   /** Redraw the drawer (after a choice changes what's shown). */
   rerender(): void;
   keySound(keyId: number, animate?: boolean): void;
+  /** Units of a SKU on the shelf. */
+  stock(sku: string): number;
+  /** All SKUs on the shelf with the prefix (e.g. "case/"). */
+  skus(prefix: string): string[];
+  /** Take parts for this build / put them back / exchange the part of a slot. */
+  reserve(sku: string, n?: number): boolean;
+  release(sku: string, n?: number): void;
+  swap(oldSku: string | null, newSku: string, n?: number): boolean;
+  openSuppliers(p: SupplierPreset): void;
+  /** Dev/test only: put a part on the shelf (auto-complete never gets stuck on stock). */
+  devGive(sku: string, n?: number): void;
   view(v: BenchView | { target: import("@babylonjs/core").Vector3; w: number; d: number; beta: number }): void;
   wake(): void;
 }
@@ -62,5 +82,7 @@ export interface TileSpec {
   selected?: boolean;
   lockedAt?: number | null;
   badge?: string;
+  /** Shown dimmed (e.g. not enough in stock) but still clickable. */
+  dim?: boolean;
   onClick: () => void;
 }

@@ -68,7 +68,7 @@ export class SolderGame {
 
   private groupCenter(g: number): Vector3 {
     const board = this.ctx.board()!;
-    const pts = this.groups[g].map((id) => board.keyWorld(id, 1.0));
+    const pts = this.groups[g].map((id) => board.keyWorld(id, 12));
     return pts.reduce((a, b) => a.add(b), Vector3.Zero()).scale(1 / Math.max(1, pts.length));
   }
 
@@ -168,7 +168,7 @@ export class SolderGame {
     const sc = this.scaleAt(now);
     this.ring.scaling.set(Math.max(0.05, sc), 1, Math.max(0.05, sc));
     const near = Math.abs(sc - PAD) <= 0.35;
-    (this.ring.material as import("@babylonjs/core").StandardMaterial).emissiveColor.set(near ? 0.5 : 1, 1, near ? 0.6 : 1);
+    (this.ring.material as import("@babylonjs/core").PBRMaterial).emissiveColor.set(near ? 0.5 : 2, 2, near ? 0.6 : 2);
     this.ctx.wake();
     if ((now - this.beatStart) / 1000 > this.dur() + 0.12) this.score(0, t("solder.miss"));
   }

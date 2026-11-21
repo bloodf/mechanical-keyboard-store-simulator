@@ -213,22 +213,47 @@ describe("save migration", () => {
     const r = new SaveManager(kv).load();
     expect(r.kind).toBe("ok");
     if (r.kind === "ok") {
-      expect(r.state.version).toBe(3);
+      expect(r.state.version).toBe(4);
       expect(r.state.profile.created).toBe(false);
       expect(r.state.money).toBe(12345);
-      expect(r.state.jobBoard).toEqual([]);
+      expect(r.state.offers).toEqual([]);
+      expect(r.state.accepted).toEqual([]);
+      expect(r.state.activeBuild).toBeNull();
+      expect(r.state.minute).toBe(9 * 60);
+      expect(r.state.needsStarterKit).toBe(true);
+    }
+  });
+  it("a v3 save (shop floor + avatar) becomes a v4 workshop: jobs → orders, build in progress → accepted", () => {
+    const kv = new MemoryKV();
+    const job = { id: "job.4", index: 4, customer: { name: "Ada Lovelace", persona: "programmer", voice: {} }, layout: { kind: "exact", id: "65" }, sound: ["thocky"], feel: "any", theme: { kind: "any" }, budget: 30000, picky: 0.4, quote: [] };
+    const v3 = {
+      version: 3, seed: "ABCDEF12", createdAt: 1, day: 5, money: 99900, reputation: 320, playTimeSec: 1000,
+      stats: { customersServed: 3, keyboardsBuilt: 3, membraneExplained: 0, angryCustomers: 0, perfectBuilds: 1, totalProfit: 5000 },
+      jobsIssued: 7, jobBoard: [{ ...job, id: "job.5", index: 5 }], activeBuild: { job, step: "plate" }, history: [],
+      profile: { name: "Sam", storeName: "Thock Shop", avatar: { skin: "#fff" }, created: true },
+      inventory: {}, goalsCompleted: [], unlocks: [], flags: { knownCheater: false, cheatCount: 0 },
+    };
+    kv.setItem(KEYS.b, seal(JSON.stringify({ slot: "b", counter: 1, savedAt: 1, state: v3 }), "slot:b"));
+    const r = new SaveManager(kv).load();
+    expect(r.kind).toBe("ok");
+    if (r.kind === "ok") {
+      expect(r.state.version).toBe(4);
+      expect(r.state.profile).toEqual({ name: "Sam", storeName: "Thock Shop", created: true });
+      expect(r.state.offers.map((o) => o.id)).toEqual(["job.5"]);
+      expect(r.state.accepted.map((o) => o.id)).toEqual(["job.4"]);
+      expect(r.state.accepted[0].due).toBeGreaterThan(5);
+      expect(r.state.ordersIssued).toBe(7);
       expect(r.state.activeBuild).toBeNull();
     }
   });
 });
 
 describe("profile", () => {
-  it("rejects broken avatars and over-long names", () => {
+  it("rejects over-long names", () => {
     const s = createNewGame();
     expect(validateState(s)).toBe(true);
     expect(validateState({ ...s, profile: { ...s.profile, name: "x".repeat(50) } })).toBe(false);
-    expect(validateState({ ...s, profile: { ...s.profile, avatar: { ...s.profile.avatar, skin: "red" } } })).toBe(false);
-    expect(validateState({ ...s, profile: { ...s.profile, avatar: { ...s.profile.avatar, hairStyle: "mohawk9000" } } })).toBe(false);
+    expect(validateState({ ...s, profile: { ...s.profile, storeName: "x".repeat(50) } })).toBe(false);
   });
 });
 

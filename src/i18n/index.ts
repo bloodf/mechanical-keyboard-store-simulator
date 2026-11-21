@@ -39,7 +39,7 @@ export function t(key: MessageKey, params: Params = {}): string {
   } else {
     const n = Number(params.count ?? 0);
     // "two" etc. are used for jokes even in English, so allow exact-number forms first.
-    const exact = n === 1 ? entry.one : n === 2 ? entry.two : undefined;
+    const exact = n === 0 ? entry.zero : n === 1 ? entry.one : n === 2 ? entry.two : undefined;
     str = exact ?? entry[plural.select(n)] ?? entry.other;
   }
   return str.replace(/\{(\w+)\}/g, (m, k: string) => (k in params ? String(params[k]) : m));

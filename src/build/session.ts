@@ -2,11 +2,11 @@
 import { derive } from "../core/rng";
 import { getLayout } from "../data/layouts";
 import { PCBS } from "../data/parts";
-import type { BuildSession, FaultyKey, JobRequest, StepId } from "./types";
+import type { BuildSession, FaultyKey, Order, StepId } from "./types";
 
 export const ALL_STEPS: StepId[] = ["case", "pcb", "damp", "plate", "stabs", "switches", "lube", "install", "solder", "screws", "keycaps", "test", "sound", "deliver"];
 
-export function newSession(job: JobRequest): BuildSession {
+export function newSession(job: Order): BuildSession {
   return {
     job,
     step: "case",
@@ -31,6 +31,8 @@ export function newSession(job: JobRequest): BuildSession {
     keycapsId: null,
     tested: false,
     soundChecked: false,
+    reserved: {},
+    family: null,
   };
 }
 

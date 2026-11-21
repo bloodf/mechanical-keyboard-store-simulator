@@ -1,58 +1,41 @@
 /** All build steps as StepViews: parts drawer tiles + the 3D minigames where they belong. */
 import type { Control } from "@babylonjs/gui";
 import { play } from "../../audio/engine";
-import { computeProfile, findSwitch, soundMatch, stabCount, targetRanges } from "../../build/profile";
+import { computeProfile, findSwitch, layoutMatches, soundMatch, stabCount, targetRanges } from "../../build/profile";
 import { applyInstall, applySolder, isHotswap, unresolvedFaults } from "../../build/session";
-import { Rng } from "../../core/rng";
-import { CUSTOM_COLOR_MATERIALS, CUSTOM_KEYCAPS_ID, CUSTOM_KEYCAPS_PRICE, randomCaseColor } from "../../data/catalog";
-import { randomColorway } from "../../data/colorway";
-import { classifyColor, toneOf } from "../../data/color";
-import { LAYOUT_IDS, getLayout } from "../../data/layouts";
+import { footprintOf, parseSku, skuCase, skuFoam, skuKeycaps, skuPcb, skuPlate, skuStab, skuSwitch, SKU_LUBE, type Footprint } from "../../build/stock";
+import type { BuildSession } from "../../build/types";
+import { getLayout, type LayoutId } from "../../data/layouts";
 import {
   CASE_MATERIALS,
   DAMPENING,
   HOUSING_SOUND,
   KEYCAP_MATERIAL_SOUND,
   KEYCAP_PROFILE_SOUND,
-  LAYOUT_PRICE_FACTOR,
   PCBS,
   PLATES,
   STABS,
   STAB_MODS,
   SWITCH_TYPE_SOUND,
-  isUnlocked,
+  type CaseMaterial,
+  type DampDef,
   type SoundMods,
 } from "../../data/parts";
-import { allKeys, formatMoney, t, tx, type MessageKey } from "../../i18n";
+import { PROFILE_GEO } from "../../data/profiles";
+import { t, type MessageKey } from "../../i18n";
 import { C, S, T } from "../../gui/theme";
 import { button, drawBox, group, H_RIGHT, label, stack, V_BOTTOM } from "../../gui/widgets";
+import { caseColorOf, cartIcon, skuView } from "../skuText";
 import { tileRow, type Pager } from "./drawer";
-import { caseIcon, diceIcon, foamIcon, keycapsIcon, layoutIcon, modIcon, pcbIcon, plateIcon, stabIcon, switchIcon } from "./icons";
+import { modIcon, plateIcon } from "./icons";
 import { radarPainter } from "./radar";
-import { syncBoard } from "./sync";
-import type { DrawerArea, StepCtx, StepView, TileSpec } from "./types";
+import type { DrawerArea, StepCtx, StepView, SupplierPreset, TileSpec } from "./types";
 import { LubeGame } from "./games/lube";
 import { ScrewGame } from "./games/screws";
 import { SOLDER_BEATS, SolderGame } from "./games/solder";
 import { TapeGame } from "./games/tape";
 import { WireGame } from "./games/wire";
 import { burst, puffs } from "./games/common";
-
-const KNOWN = new Set<string>(allKeys());
-const lockedAt = (req: { builds?: number } | undefined, builds: number) => (isUnlocked(req, builds) ? null : (req?.builds ?? null));
-const scaled = (ctx: StepCtx, cents: number) => Math.round((cents * (ctx.session.layout ? LAYOUT_PRICE_FACTOR[ctx.session.layout] : 1)) / 100) * 100;
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-
-export function colorName(c: { id: string; hex: string }): string {
-  if (KNOWN.has(`part.color.${c.id}`)) return t(`part.color.${c.id}` as MessageKey);
-  return cap(tx("color.named", { tone: `@color.tone.${toneOf(c.hex)}`, hue: `@color.hue.${classifyColor(c.hex)}` }).trim());
-}
-
-function merge(...ms: (SoundMods | undefined)[]): SoundMods {
-  const out: SoundMods = {};
-  for (const m of ms) for (const [k, v] of Object.entries(m ?? {})) out[k as keyof SoundMods] = (out[k as keyof SoundMods] ?? 0) + (v as number);
-  return out;
-}
 
 /** Sub-tab row + tiles (for steps with several choice groups). */
 function tabbed(area: DrawerArea, tabs: { id: string; label: string }[], current: string, onTab: (id: string) => void, body: (a: DrawerArea) => Control): Control {
@@ -66,199 +49,235 @@ function tabbed(area: DrawerArea, tabs: { id: string; label: string }[], current
   return root;
 }
 
+function merge(...ms: (SoundMods | undefined)[]): SoundMods {
+  const out: SoundMods = {};
+  for (const m of ms) for (const [k, v] of Object.entries(m ?? {})) out[k as keyof SoundMods] = (out[k as keyof SoundMods] ?? 0) + (v as number);
+  return out;
+}
+
+/** Footprint of the build so far (from the PCB / switch family). */
+export const fpOf = (b: BuildSession): Footprint => (b.family === "choc" ? "choc" : "mx");
+
+/** The SKU currently used by each slot of the build (derived from the session). */
+export function slotSkus(b: BuildSession) {
+  const fp = fpOf(b);
+  return {
+    case: b.layout && b.caseMaterial && b.caseColor ? skuCase(b.caseMaterial, b.layout, b.caseColor.id) : null,
+    pcb: b.layout && b.pcb ? skuPcb(b.pcb, b.layout, fp) : null,
+    plate: b.layout && b.plate && b.plate !== "none" ? skuPlate(b.plate, b.layout, fp) : null,
+    stab: b.stabs ? skuStab(b.stabs, fp) : null,
+    sw: b.switchId ? skuSwitch(b.switchId) : null,
+    kc: b.keycapsId ? skuKeycaps(b.keycapsId) : null,
+  };
+}
+
+/** The layout the order most likely wants (for supplier filters). */
+export function preferredLayout(b: BuildSession): LayoutId {
+  const l = b.job.layout;
+  return b.layout ?? (l.kind === "exact" ? l.id : l.kind === "numpad" ? "full" : l.kind === "frow" ? "75" : "65");
+}
+
+function buyTile(ctx: StepCtx, preset: SupplierPreset): TileSpec {
+  return { id: "buy", title: t("bench.buyMore"), sub: t("sup.title"), icon: cartIcon, priceText: " ", onClick: () => ctx.openSuppliers(preset) };
+}
+
+const stockText = (n: number) => t("bench.stock", { count: n });
+
+/** Release the parts that no longer fit after an earlier choice changed. */
+function invalidate(ctx: StepCtx, what: { layout?: boolean; fp?: boolean }) {
+  const b = ctx.session;
+  const cur = slotSkus(b);
+  if (what.layout || what.fp) {
+    if (cur.pcb && what.layout) (ctx.release(cur.pcb), (b.pcb = null));
+    if (cur.plate) (ctx.release(cur.plate), (b.plate = null));
+    if (b.plate === "none" && what.layout) b.plate = null;
+  }
+  if (what.fp) {
+    if (cur.stab) (ctx.release(cur.stab), (b.stabs = null), (b.stabLube = null));
+    if (cur.kc) (ctx.release(cur.kc), (b.keycapsId = null));
+  }
+  if ((what.layout || what.fp) && cur.sw) {
+    ctx.release(cur.sw, b.reserved[cur.sw] ?? 0);
+    b.switchId = null;
+    b.lube = null;
+  }
+}
+
 // ---------------- Case ----------------
 export function caseStep(ctx: StepCtx): StepView {
-  const b = () => ctx.session;
-  let tab: "layout" | "material" | "color" = b().layout ? (b().caseMaterial ? "color" : "material") : "layout";
-  const pagers: Record<string, Pager> = { layout: { page: 0 }, material: { page: 0 }, color: { page: 0 } };
+  const pager: Pager = { page: 0 };
+  const pick = (sku: string) => {
+    const s = ctx.session;
+    const info = parseSku(sku)!;
+    const cur = slotSkus(s).case;
+    if (cur === sku) return;
+    if (!ctx.swap(cur, sku)) return;
+    const layoutChanged = s.layout !== info.layout;
+    if (layoutChanged && s.layout) invalidate(ctx, { layout: true });
+    const c = caseColorOf(ctx.catalog, info.id, info.color!)!;
+    s.layout = info.layout!;
+    s.caseMaterial = info.id as CaseMaterial;
+    s.caseColor = { id: c.id, hex: c.hex };
+    if (layoutChanged || !ctx.board()) ctx.setLayoutBoard();
+    else ctx.board()?.setCase(CASE_MATERIALS.find((m) => m.id === info.id)!, c.hex);
+    play("shop.boxDrop");
+    ctx.update();
+    ctx.complete();
+    ctx.rerender();
+  };
+  const candidates = () => {
+    const s = ctx.session;
+    const own = slotSkus(s).case;
+    const list = ctx.skus("case/");
+    if (own && !list.includes(own)) list.unshift(own);
+    // cases that fit the order first
+    return list.sort((a, b) => Number(layoutMatches(s.job.layout, parseSku(b)!.layout!)) - Number(layoutMatches(s.job.layout, parseSku(a)!.layout!)));
+  };
   return {
-    render(area) {
-      const s = b();
-      return tabbed(
-        area,
-        [
-          { id: "layout", label: t("bench.tab.layout") },
-          { id: "material", label: t("bench.tab.material") },
-          { id: "color", label: t("bench.tab.color") },
-        ],
-        tab,
-        (id) => ((tab = id as typeof tab), ctx.rerender()),
-        (a) => {
-          if (tab === "layout") {
-            return tileRow(
-              LAYOUT_IDS.map((id) => ({
-                id,
-                title: t(`layout.name.${id}` as MessageKey),
-                sub: t(`layout.desc.${id}` as MessageKey),
-                icon: layoutIcon(id),
-                selected: s.layout === id,
-                onClick: () => {
-                  if (s.layout !== id) {
-                    s.layout = id;
-                    ctx.setLayoutBoard();
-                    play("shop.boxDrop");
-                  }
-                  tab = "material";
-                  ctx.update();
-                  ctx.rerender();
-                },
-              })),
-              a,
-              pagers.layout,
-              ctx.rerender,
-              { testPrefix: "layout" },
-            );
-          }
-          if (tab === "material") {
-            return tileRow(
-              CASE_MATERIALS.map((m) => ({
-                id: m.id,
-                title: t(`part.case.${m.id}` as MessageKey),
-                sub: t("bench.mount", { mount: t(`part.mount.${m.mount}` as MessageKey) }),
-                price: scaled(ctx, m.price),
-                effects: m.sound,
-                icon: caseIcon(ctx.catalog.caseColors[m.id][0].hex, m.id),
-                selected: s.caseMaterial === m.id,
-                lockedAt: lockedAt(m.requires, ctx.builds),
-                onClick: () => {
-                  if (!s.layout) {
-                    tab = "layout";
-                    ctx.rerender();
-                    return;
-                  }
-                  s.caseMaterial = m.id;
-                  const colors = ctx.catalog.caseColors[m.id];
-                  if (!s.caseColor || !colors.some((c) => c.id === s.caseColor!.id)) s.caseColor = { id: colors[0].id, hex: colors[0].hex };
-                  ctx.board()?.setCase(m, s.caseColor.hex);
-                  play("shop.boxDrop");
-                  tab = "color";
-                  ctx.update();
-                  ctx.rerender();
-                },
-              })),
-              a,
-              pagers.material,
-              ctx.rerender,
-              { testPrefix: "case" },
-            );
-          }
-          const m = CASE_MATERIALS.find((x) => x.id === s.caseMaterial);
-          if (!m) return label(t("step.case.hint"), { size: T.body, color: C.inkSoft });
-          const tiles: TileSpec[] = ctx.catalog.caseColors[m.id].map((c) => ({
-            id: c.id,
-            title: colorName(c),
-            icon: caseIcon(c.hex, m.id),
-            selected: s.caseColor?.id === c.id,
-            priceText: " ",
-            onClick: () => {
-              s.caseColor = { id: c.id, hex: c.hex };
-              ctx.board()?.setCase(m, c.hex, false);
-              play("ui.toggle");
-              ctx.update();
-              ctx.rerender();
-            },
-          }));
-          if (CUSTOM_COLOR_MATERIALS.includes(m.id)) {
-            const custom = s.caseColor?.id === "custom" ? s.caseColor : null;
-            tiles.unshift({
-              id: "custom",
-              title: custom ? colorName(custom) : t("color.custom"),
-              sub: t("color.roll"),
-              icon: custom ? caseIcon(custom.hex, m.id) : diceIcon,
-              selected: !!custom,
-              priceText: t("bench.free"),
-              badge: "🎲",
-              onClick: () => {
-                const hex = randomCaseColor(m.id, Math.random);
-                s.caseColor = { id: "custom", hex };
-                ctx.board()?.setCase(m, hex, false);
-                play("ui.confirm");
-                ctx.update();
-                ctx.rerender();
-              },
-            });
-          }
-          return tileRow(tiles, a, pagers.color, ctx.rerender, { testPrefix: "color", tileW: area.portrait ? 110 : 132 });
-        },
-      );
+    render(a) {
+      const s = ctx.session;
+      const own = slotSkus(s).case;
+      const tiles: TileSpec[] = candidates().map((sku) => {
+        const v = skuView(sku, ctx.catalog);
+        const info = parseSku(sku)!;
+        const fits = layoutMatches(s.job.layout, info.layout!);
+        return {
+          id: sku.replace(/\//g, "_"),
+          title: v.title,
+          sub: v.sub,
+          icon: v.icon,
+          effects: v.effects,
+          selected: own === sku,
+          dim: !fits,
+          priceText: own === sku ? t("bench.stock", { count: ctx.stock(sku) + 1 }) : stockText(ctx.stock(sku)),
+          onClick: () => pick(sku),
+        };
+      });
+      tiles.push(buyTile(ctx, { tab: "case", layout: preferredLayout(s) }));
+      if (tiles.length === 1) tiles.unshift({ id: "none", title: t("bench.noMatch"), icon: () => {}, priceText: " ", onClick: () => ctx.openSuppliers({ tab: "case", layout: preferredLayout(s) }) });
+      return tileRow(tiles, a, pager, ctx.rerender, { testPrefix: "case" });
     },
     auto() {
-      const s = b();
-      const want = s.job.layout.kind === "exact" ? s.job.layout.id : s.job.layout.kind === "numpad" ? "full" : s.job.layout.kind === "frow" ? "75" : "65";
-      s.layout = want;
-      s.caseMaterial = "aluminum";
-      const c = ctx.catalog.caseColors.aluminum[0];
-      s.caseColor = { id: c.id, hex: c.hex };
-      const board = ctx.setLayoutBoard();
-      if (board) syncBoard(board, s, ctx.catalog);
-      ctx.update();
+      const s = ctx.session;
+      const want = preferredLayout(s);
+      let sku = candidates().find((k) => parseSku(k)!.layout === want);
+      if (!sku) {
+        sku = skuCase("aluminum", want, ctx.catalog.caseColors.aluminum[0].id);
+        ctx.devGive(sku);
+      }
+      pick(sku);
     },
   };
 }
 
-// ---------------- Simple pickers ----------------
-function simplePicker(ctx: StepCtx, tiles: () => TileSpec[], prefix: string, auto: () => void): StepView {
-  const pager: Pager = { page: 0 };
-  return { render: (a) => tileRow(tiles(), a, pager, ctx.rerender, { testPrefix: prefix }), auto };
-}
-
+// ---------------- PCB ----------------
 export function pcbStep(ctx: StepCtx): StepView {
-  return simplePicker(
-    ctx,
-    () =>
-      PCBS.map((p) => ({
-        id: p.id,
-        title: t(`part.pcb.${p.id}` as MessageKey),
-        sub: t(`part.pcbDesc.${p.id}` as MessageKey),
-        price: scaled(ctx, p.price),
-        effects: p.sound,
-        icon: pcbIcon(p.color, p.rgb, p.flex),
-        selected: ctx.session.pcb === p.id,
-        lockedAt: lockedAt(p.requires, ctx.builds),
-        onClick: () => {
-          ctx.session.pcb = p.id;
-          ctx.board()?.setPcb(p);
-          play("bench.pcbSnap");
-          ctx.update();
-          ctx.rerender();
-        },
-      })),
-    "pcb",
-    () => {
-      ctx.session.pcb = "hotswap";
-      ctx.board()?.setPcb(PCBS[0]);
-      ctx.update();
+  const pager: Pager = { page: 0 };
+  const pick = (sku: string) => {
+    const s = ctx.session;
+    const info = parseSku(sku)!;
+    const cur = slotSkus(s).pcb;
+    if (cur === sku) return;
+    if (!ctx.swap(cur, sku)) return;
+    const newFp = info.fp!;
+    if (fpOf(s) !== newFp || s.family === null) {
+      if (s.family !== null && fpOf(s) !== newFp) invalidate(ctx, { fp: true });
+      s.family = newFp === "choc" ? "choc" : "mx";
+      ctx.board()?.setFamily(s.family);
+    }
+    s.pcb = info.id as BuildSession["pcb"];
+    ctx.board()?.setPcb(PCBS.find((p) => p.id === info.id)!);
+    play("bench.pcbSnap");
+    ctx.update();
+    ctx.complete();
+    ctx.rerender();
+  };
+  const candidates = () => {
+    const s = ctx.session;
+    const own = slotSkus(s).pcb;
+    const list = ctx.skus("pcb/").filter((k) => parseSku(k)!.layout === s.layout);
+    if (own && !list.includes(own)) list.unshift(own);
+    return list;
+  };
+  return {
+    render(a) {
+      const s = ctx.session;
+      const own = slotSkus(s).pcb;
+      const tiles: TileSpec[] = candidates().map((sku) => {
+        const v = skuView(sku, ctx.catalog);
+        return { id: sku.replace(/\//g, "_"), title: v.title, sub: v.sub, icon: v.icon, effects: v.effects, selected: own === sku, priceText: stockText(ctx.stock(sku) + (own === sku ? 1 : 0)), onClick: () => pick(sku) };
+      });
+      tiles.push(buyTile(ctx, { tab: "pcb", layout: s.layout ?? undefined }));
+      return tileRow(tiles, a, pager, ctx.rerender, { testPrefix: "pcb" });
     },
-  );
+    auto() {
+      const s = ctx.session;
+      const want = s.job.wants?.lowProfile ? "choc" : "mx";
+      let sku = candidates().find((k) => parseSku(k)!.fp === want);
+      if (!sku) {
+        sku = skuPcb("hotswap", s.layout!, want);
+        ctx.devGive(sku);
+      }
+      pick(sku);
+    },
+  };
 }
 
+// ---------------- Plate ----------------
 export function plateStep(ctx: StepCtx): StepView {
-  return simplePicker(
-    ctx,
-    () =>
-      PLATES.map((p) => ({
-        id: p.id,
-        title: t(`part.plate.${p.id}` as MessageKey),
-        price: scaled(ctx, p.price),
-        effects: p.sound,
-        icon: plateIcon(p.color, p.id === "none"),
-        selected: ctx.session.plate === p.id,
-        lockedAt: lockedAt(p.requires, ctx.builds),
-        onClick: () => {
-          ctx.session.plate = p.id;
-          ctx.board()?.setPlate(p);
-          play(p.id === "none" ? "ui.toggle" : "bench.pcbSnap");
-          ctx.update();
-          ctx.rerender();
-        },
-      })),
-    "plate",
-    () => {
-      ctx.session.plate = "aluminum";
-      ctx.board()?.setPlate(PLATES[0]);
-      ctx.update();
+  const pager: Pager = { page: 0 };
+  const pick = (sku: string | "none") => {
+    const s = ctx.session;
+    const cur = slotSkus(s).plate;
+    if (sku === "none") {
+      if (cur) ctx.release(cur);
+      s.plate = "none";
+      ctx.board()?.setPlate(PLATES.find((p) => p.id === "none")!);
+      play("ui.toggle");
+    } else {
+      if (cur !== sku && !ctx.swap(cur, sku)) return;
+      const info = parseSku(sku)!;
+      s.plate = info.id as BuildSession["plate"];
+      ctx.board()?.setPlate(PLATES.find((p) => p.id === info.id)!);
+      play("bench.pcbSnap");
+    }
+    ctx.update();
+    ctx.complete();
+    ctx.rerender();
+  };
+  const candidates = () => {
+    const s = ctx.session;
+    const own = slotSkus(s).plate;
+    const list = ctx.skus("plate/").filter((k) => {
+      const i = parseSku(k)!;
+      return i.layout === s.layout && i.fp === fpOf(s);
+    });
+    if (own && !list.includes(own)) list.unshift(own);
+    return list;
+  };
+  return {
+    render(a) {
+      const s = ctx.session;
+      const own = slotSkus(s).plate;
+      const tiles: TileSpec[] = candidates().map((sku) => {
+        const v = skuView(sku, ctx.catalog);
+        return { id: sku.replace(/\//g, "_"), title: v.title, sub: v.sub, icon: v.icon, effects: v.effects, selected: own === sku, priceText: stockText(ctx.stock(sku) + (own === sku ? 1 : 0)), onClick: () => pick(sku) };
+      });
+      const none = PLATES.find((p) => p.id === "none")!;
+      tiles.push({ id: "none", title: t("part.plate.none"), icon: plateIcon(none.color, true), effects: none.sound, selected: s.plate === "none", priceText: t("bench.free"), onClick: () => pick("none") });
+      tiles.push(buyTile(ctx, { tab: "plate", layout: s.layout ?? undefined, fp: fpOf(s) }));
+      return tileRow(tiles, a, pager, ctx.rerender, { testPrefix: "plate" });
     },
-  );
+    auto() {
+      const s = ctx.session;
+      let sku = candidates()[0];
+      if (!sku) {
+        sku = skuPlate("aluminum", s.layout!, fpOf(s));
+        ctx.devGive(sku);
+      }
+      pick(sku);
+    },
+  };
 }
 
 // ---------------- Dampening (+ 3D tape minigame) ----------------
@@ -273,6 +292,26 @@ export function dampStep(ctx: StepCtx): StepView {
     ctx.complete();
     ctx.rerender();
   };
+  const toggle = (id: DampDef["id"]) => {
+    const s = ctx.session;
+    const sku = skuFoam(id);
+    if (s.damp.includes(id)) {
+      ctx.release(sku);
+      s.damp = s.damp.filter((x) => x !== id);
+      if (id === "tape") {
+        s.tapeQuality = null;
+        ctx.board()?.setTape([]);
+      }
+      play("ui.toggle");
+    } else {
+      if (!ctx.reserve(sku)) return ctx.openSuppliers({ tab: "foam" });
+      s.damp = [...s.damp, id];
+      play(id === "tape" ? "bench.tape" : "bench.foam");
+    }
+    ctx.board()?.setDampening(s.damp);
+    ctx.update();
+    ctx.rerender();
+  };
   const view: StepView = {
     get compact() {
       return !!game;
@@ -283,40 +322,13 @@ export function dampStep(ctx: StepCtx): StepView {
       const body = group({ w: a.w, h: a.h });
       const needsTape = s.damp.includes("tape") && s.tapeQuality === null;
       const tilesArea = { ...a, h: needsTape ? a.h - 56 : a.h };
-      body.addControl(
-        tileRow(
-          DAMPENING.map((d) => ({
-            id: d.id,
-            title: t(`part.damp.${d.id}` as MessageKey),
-            sub: t(`part.dampDesc.${d.id}` as MessageKey),
-            price: scaled(ctx, d.price),
-            effects: d.sound,
-            icon: foamIcon(d.id === "caseFoam" ? "#3d4148" : d.id === "plateFoam" ? "#d8d1bd" : d.id === "silicone" ? "#dfe8ee" : "#fafafa", d.id),
-            selected: s.damp.includes(d.id),
-            lockedAt: lockedAt(d.requires, ctx.builds),
-            onClick: () => {
-              if (s.damp.includes(d.id)) {
-                s.damp = s.damp.filter((x) => x !== d.id);
-                if (d.id === "tape") {
-                  s.tapeQuality = null;
-                  ctx.board()?.setTape([]);
-                }
-                play("ui.toggle");
-              } else {
-                s.damp = [...s.damp, d.id];
-                play(d.id === "tape" ? "bench.tape" : "bench.foam");
-              }
-              ctx.board()?.setDampening(s.damp);
-              ctx.update();
-              ctx.rerender();
-            },
-          })),
-          tilesArea,
-          pager,
-          ctx.rerender,
-          { testPrefix: "damp" },
-        ),
-      );
+      const tiles: TileSpec[] = DAMPENING.filter((d) => s.damp.includes(d.id) || ctx.stock(skuFoam(d.id)) > 0).map((d) => {
+        const v = skuView(skuFoam(d.id), ctx.catalog);
+        const n = ctx.stock(skuFoam(d.id));
+        return { id: d.id, title: v.title, sub: v.sub, icon: v.icon, effects: d.sound, selected: s.damp.includes(d.id), priceText: stockText(n + (s.damp.includes(d.id) ? 1 : 0)), onClick: () => toggle(d.id) };
+      });
+      tiles.push(buyTile(ctx, { tab: "foam" }));
+      body.addControl(tileRow(tiles, tilesArea, pager, ctx.rerender, { testPrefix: "damp" }));
       if (needsTape)
         body.addControl(
           button(`🩹 ${t("bench.applyTape")}`, {
@@ -336,11 +348,14 @@ export function dampStep(ctx: StepCtx): StepView {
     },
     onPointer: (type, x, y) => game?.onPointer(type, x, y),
     auto() {
+      const s = ctx.session;
       if (game) game.auto();
-      else if (ctx.session.damp.includes("tape") && ctx.session.tapeQuality === null) finish(1);
+      else if (s.damp.includes("tape") && s.tapeQuality === null) finish(1);
       else {
-        ctx.session.damp = ["caseFoam", "plateFoam"];
-        ctx.board()?.setDampening(ctx.session.damp);
+        if (!s.damp.includes("caseFoam")) {
+          if (ctx.stock(skuFoam("caseFoam")) === 0) ctx.devGive(skuFoam("caseFoam"));
+          toggle("caseFoam");
+        }
         ctx.update();
       }
     },
@@ -364,6 +379,25 @@ export function stabStep(ctx: StepCtx): StepView {
     ctx.complete();
     ctx.rerender();
   };
+  const pick = (sku: string) => {
+    const s = ctx.session;
+    const cur = slotSkus(s).stab;
+    if (cur !== sku && !ctx.swap(cur, sku)) return;
+    const st = STABS.find((x) => x.id === parseSku(sku)!.id)!;
+    s.stabs = st.id;
+    ctx.board()?.setStabs(st, (s.stabLube ?? 0) > 0.3);
+    play("bench.keycapPlace");
+    tab = "mods";
+    ctx.update();
+    ctx.rerender();
+  };
+  const candidates = () => {
+    const s = ctx.session;
+    const own = slotSkus(s).stab;
+    const list = ctx.skus("stab/").filter((k) => parseSku(k)!.fp === fpOf(s));
+    if (own && !list.includes(own)) list.unshift(own);
+    return list;
+  };
   return {
     get compact() {
       return !!game;
@@ -371,6 +405,7 @@ export function stabStep(ctx: StepCtx): StepView {
     render(a) {
       if (game) return game.render(a);
       const s = ctx.session;
+      const own = slotSkus(s).stab;
       const body = group({ w: a.w, h: a.h });
       const bottomRow = s.stabs ? 56 : 0;
       body.addControl(
@@ -382,50 +417,36 @@ export function stabStep(ctx: StepCtx): StepView {
           ],
           tab,
           (id) => ((tab = id as typeof tab), ctx.rerender()),
-          (area) =>
-            tab === "tiers"
-              ? tileRow(
-                  STABS.map((st) => ({
-                    id: st.id,
-                    title: t(`part.stabs.${st.id}` as MessageKey),
-                    price: st.price,
-                    icon: stabIcon(st.id === "premium" ? "#f1f1f1" : st.id === "standard" ? "#2a2a2a" : "#8a8a8a"),
-                    selected: s.stabs === st.id,
-                    lockedAt: lockedAt(st.requires, ctx.builds),
-                    onClick: () => {
-                      s.stabs = st.id;
-                      ctx.board()?.setStabs(st, (s.stabLube ?? 0) > 0.3);
-                      play("bench.keycapPlace");
-                      tab = "mods";
-                      ctx.update();
-                      ctx.rerender();
-                    },
-                  })),
-                  area,
-                  pagers.tiers,
-                  ctx.rerender,
-                  { testPrefix: "stabs" },
-                )
-              : tileRow(
-                  STAB_MODS.map((m) => ({
-                    id: m,
-                    title: t(`part.stabMod.${m}` as MessageKey),
-                    sub: t(`part.stabModDesc.${m}` as MessageKey),
-                    price: m === "bandaid" ? 1_00 : 0,
-                    icon: modIcon(m),
-                    selected: s.stabMods.includes(m),
-                    onClick: () => {
-                      s.stabMods = s.stabMods.includes(m) ? s.stabMods.filter((x) => x !== m) : [...s.stabMods, m];
-                      play(m === "clip" ? "bench.switchOpen" : "bench.tape");
-                      ctx.update();
-                      ctx.rerender();
-                    },
-                  })),
-                  area,
-                  pagers.mods,
-                  ctx.rerender,
-                  { testPrefix: "stabmod" },
-                ),
+          (area) => {
+            if (tab === "tiers") {
+              const tiles: TileSpec[] = candidates().map((sku) => {
+                const v = skuView(sku, ctx.catalog);
+                return { id: sku.replace(/\//g, "_"), title: v.title, sub: v.sub, icon: v.icon, selected: own === sku, priceText: stockText(ctx.stock(sku) + (own === sku ? 1 : 0)), onClick: () => pick(sku) };
+              });
+              tiles.push(buyTile(ctx, { tab: "stab", fp: fpOf(s) }));
+              return tileRow(tiles, area, pagers.tiers, ctx.rerender, { testPrefix: "stabs" });
+            }
+            return tileRow(
+              STAB_MODS.map((m) => ({
+                id: m,
+                title: t(`part.stabMod.${m}` as MessageKey),
+                sub: t(`part.stabModDesc.${m}` as MessageKey),
+                priceText: t("bench.free"),
+                icon: modIcon(m),
+                selected: s.stabMods.includes(m),
+                onClick: () => {
+                  s.stabMods = s.stabMods.includes(m) ? s.stabMods.filter((x) => x !== m) : [...s.stabMods, m];
+                  play(m === "clip" ? "bench.switchOpen" : "bench.tape");
+                  ctx.update();
+                  ctx.rerender();
+                },
+              })),
+              area,
+              pagers.mods,
+              ctx.rerender,
+              { testPrefix: "stabmod" },
+            );
+          },
         ),
       );
       if (s.stabs) {
@@ -452,9 +473,15 @@ export function stabStep(ctx: StepCtx): StepView {
     onPointer: (type, x, y) => game?.onPointer(type, x, y),
     update: (dt) => game?.update(dt),
     auto() {
-      if (!ctx.session.stabs) {
-        ctx.session.stabs = "standard";
-        ctx.session.stabMods = ["clip", "bandaid"];
+      const s = ctx.session;
+      if (!s.stabs) {
+        let sku = candidates()[0];
+        if (!sku) {
+          sku = skuStab("standard", fpOf(s));
+          ctx.devGive(sku);
+        }
+        pick(sku);
+        s.stabMods = ["clip", "bandaid"];
       }
       if (game) game.auto();
       else finish(1);
@@ -466,40 +493,71 @@ export function stabStep(ctx: StepCtx): StepView {
 // ---------------- Switches ----------------
 export function switchStep(ctx: StepCtx): StepView {
   const pager: Pager = { page: 0 };
+  const need = () => getLayout(ctx.session.layout!).keys.length;
+  const pick = (sku: string) => {
+    const s = ctx.session;
+    const n = need();
+    const cur = slotSkus(s).sw;
+    if (cur === sku) return;
+    if (ctx.stock(sku) < n) return ctx.openSuppliers({ tab: "sw", fp: fpOf(s) });
+    if (cur) ctx.release(cur, s.reserved[cur] ?? 0);
+    if (!ctx.reserve(sku, n)) return;
+    const sw = ctx.catalog.switches.find((x) => x.id === parseSku(sku)!.id)!;
+    s.switchId = sw.id;
+    s.lube = null;
+    s.family = sw.family;
+    ctx.board()?.setSwitchLook(sw);
+    ctx.update();
+    const keys = getLayout(s.layout!).keys;
+    for (let i = 0; i < 3; i++) setTimeout(() => ctx.keySound(keys[Math.floor(Math.random() * keys.length)].id, false), i * 130);
+    ctx.complete();
+    ctx.rerender();
+  };
+  const fits = (sku: string) => {
+    const sw = ctx.catalog.switches.find((x) => x.id === parseSku(sku)!.id);
+    return !!sw && footprintOf(sw.family) === fpOf(ctx.session);
+  };
+  const candidates = () => {
+    const s = ctx.session;
+    const own = slotSkus(s).sw;
+    const list = ctx.skus("sw/").filter(fits);
+    if (own && !list.includes(own)) list.unshift(own);
+    return list;
+  };
   return {
     render(a) {
       const s = ctx.session;
-      const count = s.layout ? getLayout(s.layout).keys.length : 0;
-      return tileRow(
-        ctx.catalog.switches.map((sw) => ({
+      const own = slotSkus(s).sw;
+      const n = need();
+      const tiles: TileSpec[] = candidates().map((sku) => {
+        const v = skuView(sku, ctx.catalog);
+        const sw = ctx.catalog.switches.find((x) => x.id === parseSku(sku)!.id)!;
+        const have = ctx.stock(sku) + (own === sku ? (s.reserved[sku] ?? 0) : 0);
+        return {
           id: sw.id,
-          title: `${sw.brand} ${sw.name}`,
-          sub: [t("part.switch.spec", { type: t(`part.switchType.${sw.type}` as MessageKey), weight: sw.springG, housing: t(`part.housing.${sw.housing}` as MessageKey) }), sw.factoryLubed ? t("part.switch.lubed") : null, sw.longPole ? t("part.switch.longPole") : null].filter(Boolean).join(" · "),
-          priceText: t("bench.perSwitch", { price: formatMoney(sw.pricePerSwitch), count }),
+          title: v.title,
+          sub: v.sub,
+          icon: v.icon,
           effects: merge(SWITCH_TYPE_SOUND[sw.type], HOUSING_SOUND[sw.housing], sw.longPole ? { brightness: 0.15, depth: -0.08 } : undefined),
-          icon: switchIcon(sw.housingColor, sw.housingOpacity, sw.stemColor),
-          selected: s.switchId === sw.id,
-          lockedAt: lockedAt(sw.requires, ctx.builds),
-          onClick: () => {
-            if (s.switchId !== sw.id) s.lube = null;
-            s.switchId = sw.id;
-            ctx.board()?.setSwitchLook(sw);
-            ctx.update();
-            const keys = getLayout(s.layout!).keys;
-            for (let i = 0; i < 3; i++) setTimeout(() => ctx.keySound(keys[Math.floor(Math.random() * keys.length)].id, false), i * 130);
-            ctx.rerender();
-          },
-        })),
-        a,
-        pager,
-        ctx.rerender,
-        { testPrefix: "switch", tileW: a.portrait ? 140 : 180 },
-      );
+          selected: own === sku,
+          dim: have < n,
+          priceText: have < n ? t("bench.need", { need: n, have }) : stockText(have),
+          onClick: () => pick(sku),
+        };
+      });
+      tiles.push(buyTile(ctx, { tab: "sw", fp: fpOf(s) }));
+      return tileRow(tiles, a, pager, ctx.rerender, { testPrefix: "switch", tileW: a.portrait ? 140 : 180 });
     },
     auto() {
-      ctx.session.switchId = ctx.catalog.switches[0].id;
-      ctx.board()?.setSwitchLook(ctx.catalog.switches[0]);
-      ctx.update();
+      const s = ctx.session;
+      const n = need();
+      let sku = candidates().find((k) => ctx.stock(k) >= n);
+      if (!sku) {
+        const sw = ctx.catalog.switches.find((x) => footprintOf(x.family) === fpOf(s))!;
+        sku = skuSwitch(sw.id);
+        ctx.devGive(sku, n);
+      }
+      pick(sku);
     },
   };
 }
@@ -507,7 +565,8 @@ export function switchStep(ctx: StepCtx): StepView {
 // ---------------- Lube (3D minigame) ----------------
 export function lubeStep(ctx: StepCtx): StepView {
   const sw = findSwitch(ctx.catalog, ctx.session.switchId)!;
-  let game: LubeGame | null = ctx.session.lube ? null : new LubeGame(ctx, sw, done);
+  const hasLube = () => (ctx.session.reserved[SKU_LUBE] ?? 0) > 0 || ctx.reserve(SKU_LUBE);
+  let game: LubeGame | null = ctx.session.lube || !hasLube() ? null : new LubeGame(ctx, sw, done);
   function done(r: { quality: number; over: number }) {
     ctx.session.lube = { ...r, skipped: false };
     game?.dispose();
@@ -530,6 +589,24 @@ export function lubeStep(ctx: StepCtx): StepView {
     compact: true,
     render(a) {
       const s = ctx.session;
+      if (!game && !s.lube) {
+        // no lube on the shelf: skip, or order some
+        const row = stack({ horizontal: true, h: 56, spacing: S.md });
+        row.addControl(label(t("bench.noLube"), { w: 240, size: T.h3, weight: 700 }));
+        row.addControl(button(t("lube.skip"), { w: 170, testId: "lube-skip", onClick: skip }));
+        row.addControl(button(t("bench.buyMore"), { w: 190, testId: "lube-buy", onClick: () => ctx.openSuppliers({ tab: "lube" }) }));
+        row.addControl(
+          button("↺", {
+            w: 60,
+            testId: "lube-retry",
+            onClick: () => {
+              if (hasLube()) game = new LubeGame(ctx, sw, done);
+              ctx.rerender();
+            },
+          }),
+        );
+        return row;
+      }
       if (!game) {
         const row = stack({ horizontal: true, h: 56, spacing: S.md });
         row.addControl(label(s.lube?.skipped ? t("lube.skip") : t("lube.result", { pct: Math.round((s.lube?.quality ?? 0) * 100) }), { w: 280, size: T.h3, weight: 700 }));
@@ -539,7 +616,7 @@ export function lubeStep(ctx: StepCtx): StepView {
             testId: "lube-redo",
             onClick: () => {
               s.lube = null;
-              game = new LubeGame(ctx, sw, done);
+              if (hasLube()) game = new LubeGame(ctx, sw, done);
               ctx.update();
               ctx.rerender();
             },
@@ -557,7 +634,11 @@ export function lubeStep(ctx: StepCtx): StepView {
     update: () => game?.update(),
     auto() {
       if (game) game.auto();
-      else if (!ctx.session.lube) done({ quality: 1, over: 0 });
+      else if (!ctx.session.lube) {
+        if (!hasLube()) ctx.devGive(SKU_LUBE);
+        hasLube();
+        done({ quality: 1, over: 0 });
+      }
     },
     dispose: () => game?.dispose(),
   };
@@ -685,7 +766,7 @@ export function keycapStep(ctx: StepCtx): StepView {
   let cascade = 0;
   const install = () => {
     const board = ctx.board();
-    const set = ctx.session.keycapsId === CUSTOM_KEYCAPS_ID ? { id: CUSTOM_KEYCAPS_ID, brand: "", name: "", material: "pbt" as const, profile: "cherry" as const, colorway: ctx.session.customColorway!, price: CUSTOM_KEYCAPS_PRICE } : ctx.catalog.keycaps.find((k) => k.id === ctx.session.keycapsId);
+    const set = ctx.catalog.keycaps.find((k) => k.id === ctx.session.keycapsId);
     if (!board || !set) return;
     board.setKeycaps(set);
     board.setAllCaps(false, true);
@@ -700,50 +781,56 @@ export function keycapStep(ctx: StepCtx): StepView {
       }, 150 + i * 12),
     );
   };
+  const pick = (sku: string) => {
+    const s = ctx.session;
+    const cur = slotSkus(s).kc;
+    if (cur === sku) return;
+    if (!ctx.swap(cur, sku)) return;
+    s.keycapsId = parseSku(sku)!.id;
+    install();
+    ctx.update();
+    ctx.complete();
+    ctx.rerender();
+  };
+  const fits = (sku: string) => {
+    const k = ctx.catalog.keycaps.find((x) => x.id === parseSku(sku)!.id);
+    return !!k && PROFILE_GEO[k.profile].mount === fpOf(ctx.session);
+  };
+  const candidates = () => {
+    const own = slotSkus(ctx.session).kc;
+    const list = ctx.skus("kc/").filter(fits);
+    if (own && !list.includes(own)) list.unshift(own);
+    return list;
+  };
   return {
     render(a) {
       const s = ctx.session;
-      const tiles: TileSpec[] = ctx.catalog.keycaps.map((k) => ({
-        id: k.id,
-        title: `${k.brand} “${k.name}”`,
-        sub: `${t(`part.keycap.material.${k.material}` as MessageKey)} · ${t(`part.keycap.profile.${k.profile}` as MessageKey)} · ${tx(`color.family.${k.colorway.family}`)}`,
-        price: scaled(ctx, k.price),
-        effects: merge(KEYCAP_MATERIAL_SOUND[k.material], KEYCAP_PROFILE_SOUND[k.profile]),
-        icon: keycapsIcon(k.colorway),
-        selected: s.keycapsId === k.id,
-        lockedAt: lockedAt(k.requires, ctx.builds),
-        onClick: () => {
-          s.keycapsId = k.id;
-          install();
-          ctx.update();
-          ctx.complete();
-          ctx.rerender();
-        },
-      }));
-      tiles.unshift({
-        id: "custom",
-        title: t("keycaps.custom"),
-        sub: t("keycaps.customSub"),
-        price: scaled(ctx, CUSTOM_KEYCAPS_PRICE),
-        icon: s.customColorway ? keycapsIcon(s.customColorway) : diceIcon,
-        selected: s.keycapsId === CUSTOM_KEYCAPS_ID,
-        badge: "🎲",
-        onClick: () => {
-          s.customColorway = randomColorway(new Rng(String(Math.random())));
-          s.keycapsId = CUSTOM_KEYCAPS_ID;
-          install();
-          play("ui.confirm");
-          ctx.update();
-          ctx.complete();
-          ctx.rerender();
-        },
+      const own = slotSkus(s).kc;
+      const tiles: TileSpec[] = candidates().map((sku) => {
+        const k = ctx.catalog.keycaps.find((x) => x.id === parseSku(sku)!.id)!;
+        const v = skuView(sku, ctx.catalog);
+        return {
+          id: k.id,
+          title: v.title,
+          sub: v.sub,
+          icon: v.icon,
+          effects: merge(KEYCAP_MATERIAL_SOUND[k.material], KEYCAP_PROFILE_SOUND[k.profile]),
+          selected: own === sku,
+          priceText: stockText(ctx.stock(sku) + (own === sku ? 1 : 0)),
+          onClick: () => pick(sku),
+        };
       });
+      tiles.push(buyTile(ctx, { tab: "kc", fp: fpOf(s) }));
       return tileRow(tiles, a, pager, ctx.rerender, { testPrefix: "keycaps", tileW: a.portrait ? 140 : 176 });
     },
     auto() {
-      ctx.session.keycapsId = ctx.catalog.keycaps[0].id;
-      install();
-      ctx.update();
+      let sku = candidates()[0];
+      if (!sku) {
+        const k = ctx.catalog.keycaps.find((x) => PROFILE_GEO[x.profile].mount === fpOf(ctx.session))!;
+        sku = skuKeycaps(k.id);
+        ctx.devGive(sku);
+      }
+      pick(sku);
     },
   };
 }
@@ -917,8 +1004,7 @@ export function soundStep(ctx: StepCtx): StepView {
       col.addControl(button(`⌨️ ${t("sound.autotype")}`, { w: 200, size: "sm", variant: "primary", testId: "autotype", onClick: autoType }));
       col.addControl(label(t("sound.tweak"), { size: T.small, weight: 700, color: C.inkSoft, h: 22 }));
       const tw = stack({ horizontal: true, h: 40, spacing: S.xs });
-      const f = s.layout ? LAYOUT_PRICE_FACTOR[s.layout] : 1;
-      for (const d of DAMPENING.filter((x) => isUnlocked(x.requires, ctx.builds)).slice(0, a.portrait ? 2 : 5)) {
+      for (const d of DAMPENING.filter((x) => s.damp.includes(x.id) || ctx.stock(skuFoam(x.id)) > 0).slice(0, a.portrait ? 2 : 5)) {
         tw.addControl(
           button(`${t(`part.damp.${d.id}` as MessageKey)}`, {
             w: a.portrait ? 92 : 128,
@@ -926,10 +1012,13 @@ export function soundStep(ctx: StepCtx): StepView {
             size: "sm",
             variant: s.damp.includes(d.id) ? "dark" : "secondary",
             testId: `tweak-${d.id}`,
-            sub: formatMoney(Math.round((d.price * f) / 100) * 100),
+            sub: s.damp.includes(d.id) ? "✓" : stockText(ctx.stock(skuFoam(d.id))),
             onClick: () => {
-              if (s.damp.includes(d.id)) s.damp = s.damp.filter((x) => x !== d.id);
-              else {
+              if (s.damp.includes(d.id)) {
+                s.damp = s.damp.filter((x) => x !== d.id);
+                ctx.release(skuFoam(d.id));
+              } else {
+                if (!ctx.reserve(skuFoam(d.id))) return;
                 s.damp = [...s.damp, d.id];
                 if (d.id === "tape" && s.tapeQuality === null) s.tapeQuality = 0.6;
               }

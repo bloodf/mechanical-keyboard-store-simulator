@@ -5,11 +5,12 @@
 import { randomVoiceParams } from "../audio/voice";
 import { derive, type Rng } from "../core/rng";
 import type { Catalog } from "../data/catalog";
-import { LAYOUT_PRICE_FACTOR, isUnlocked } from "../data/parts";
+import { CASE_MATERIALS, LAYOUT_PRICE_FACTOR, isUnlocked } from "../data/parts";
+import type { KeycapProfile } from "../data/profiles";
 import { getLayout, type LayoutId } from "../data/layouts";
 import { names, variantCount } from "../i18n";
 import { SOUND_COMBOS } from "./profile";
-import type { FeelReq, JobRequest, LayoutReq, Persona, QuoteLine, SoundWord, ThemeReq } from "./types";
+import type { FeelReq, JobRequest, LayoutReq, Order, Persona, QuoteLine, SoundWord, ThemeReq, Wants } from "./types";
 
 const PERSONAS: Persona[] = ["gamer", "programmer", "writer", "streamer", "office", "student", "grandparent", "audiophile", "collector", "artist"];
 
@@ -117,4 +118,102 @@ export function generateJob(seed: string, index: number, catalog: Catalog, build
     picky,
     quote,
   };
+}
+
+// ---------------------------------------------------------------- orders (workshop inbox)
+
+const PROFILE_FANS: Partial<Record<Persona, KeycapProfile[]>> = {
+  gamer: ["oem", "cherry", "xda"],
+  programmer: ["cherry", "mt3", "sa"],
+  writer: ["sa", "mt3", "kat"],
+  collector: ["mt3", "sa", "kat", "dsa"],
+  artist: ["xda", "dsa", "kat"],
+  audiophile: ["cherry", "sa", "mt3"],
+  streamer: ["cherry", "kat", "xda"],
+};
+const LOW_PROFILE_FANS: Persona[] = ["office", "student", "programmer", "writer"];
+
+/** Days to build & ship, by keyboard size. */
+const LEAD_DAYS: Record<LayoutId, number> = { "40": 2, "60": 2, "65": 3, "75": 3, tkl: 3, full: 4 };
+
+export interface OrderContext {
+  day: number;
+  builds: number;
+  /** The very first order of a new game: a simple 65% that the starter stock can build. */
+  tutorial?: boolean;
+}
+
+export function generateOrder(seed: string, index: number, cat: Catalog, o: OrderContext): Order {
+  const rng = derive(seed, "order", index);
+  if (!o.tutorial && index >= 2 && rng.chance(0.12)) return membraneOrder(seed, index, o.day);
+  const job = generateJob(seed, index, cat, o.builds);
+  if (o.tutorial) {
+    job.layout = { kind: "exact", id: "65" };
+    job.feel = "any";
+    job.theme = { kind: "any" };
+    job.sound = ["creamy"]; // what the starter kit does well
+    job.picky = 0.2;
+    job.budget = Math.max(job.budget, 320_00);
+    job.quote = [
+      { key: "job.greet.0", params: { name: job.customer.name.split(" ")[0] } },
+      { key: "job.tutorial.0", params: {} },
+      { key: "job.budget.0", params: { money: job.budget } },
+    ];
+  }
+  // Explicit wishes (more of them once the player has some experience)
+  const wants: Wants = {};
+  const exp = Math.min(1, o.builds / 6);
+  const sets = cat.keycaps.filter((k) => isUnlocked(k.requires, o.builds));
+  const fans = PROFILE_FANS[job.customer.persona];
+  if (!o.tutorial && fans && rng.chance(0.15 + 0.25 * exp)) {
+    const options = fans.filter((p) => sets.some((s) => s.profile === p));
+    if (options.length) wants.profile = rng.pick(options);
+  }
+  const chocOk = cat.switches.some((s) => s.family === "choc" && isUnlocked(s.requires, o.builds)) && sets.some((s) => s.profile === "lp");
+  if (!o.tutorial && !wants.profile && chocOk && LOW_PROFILE_FANS.includes(job.customer.persona) && rng.chance(0.3)) wants.lowProfile = true;
+  if (!o.tutorial && rng.chance(0.12 + 0.1 * exp)) wants.hotswap = true;
+  if (!o.tutorial && rng.chance(0.1 * exp)) {
+    const mats = CASE_MATERIALS.filter((m) => isUnlocked(m.requires, o.builds));
+    wants.caseMaterial = rng.pick(mats).id;
+  }
+  const extra: QuoteLine[] = [];
+  if (wants.profile) extra.push({ key: pickVariant(rng, "job.wants.profile"), params: { profile: `@part.keycap.profile.${wants.profile}` } });
+  if (wants.lowProfile) extra.push({ key: pickVariant(rng, "job.wants.lowProfile"), params: {} });
+  if (wants.hotswap) extra.push({ key: pickVariant(rng, "job.wants.hotswap"), params: {} });
+  if (wants.caseMaterial) extra.push({ key: pickVariant(rng, "job.wants.case"), params: { material: `@part.case.${wants.caseMaterial}` } });
+  // wishes go before the budget line
+  job.quote.splice(job.quote.length - 1, 0, ...extra);
+  if (Object.keys(wants).length) {
+    job.wants = wants;
+    job.budget = Math.round((job.budget * 1.08) / 5_00) * 5_00;
+    job.quote[job.quote.length - 1].params.money = job.budget;
+  }
+  const size: LayoutId = job.layout.kind === "exact" ? job.layout.id : job.layout.kind === "numpad" ? "full" : job.layout.kind === "frow" ? "75" : "65";
+  const lead = LEAD_DAYS[size] + (o.tutorial ? 1 : rng.int(0, 2));
+  return { ...job, id: `order.${index}`, kind: "build", received: o.day, expires: o.day + 1, due: o.day + lead };
+}
+
+/** Someone wants their membrane keyboard "converted". (You can't. You explain. Politely.) */
+function membraneOrder(seed: string, index: number, day: number): Order {
+  const job = generateJob(seed, index, { switches: [], keycaps: [], caseColors: {} as Catalog["caseColors"] }, 0);
+  const rng = derive(seed, "membrane", index);
+  const first = job.customer.name.split(" ")[0];
+  const quote: QuoteLine[] = [
+    { key: pickVariant(rng, "job.greet"), params: { name: first } },
+    { key: pickVariant(rng, "membrane.ask"), params: {} },
+    { key: pickVariant(rng, "membrane.detail"), params: {} },
+  ];
+  const offer = Math.round(rng.range(15, 60)) * 100;
+  quote.push({ key: pickVariant(rng, "membrane.offer"), params: { money: offer } });
+  return { ...job, id: `order.${index}`, kind: "membrane", quote, budget: offer, wants: undefined, received: day, expires: day + 1, due: day + 1 };
+}
+
+/** A membrane customer who listened: they now want a real mechanical keyboard. */
+export function convertMembrane(seed: string, o: Order, cat: Catalog, day: number, builds: number): Order {
+  const job = generateJob(seed, o.index, cat, builds);
+  const first = o.customer.name.split(" ")[0];
+  job.customer = o.customer;
+  job.quote[0] = { key: "job.greet.0", params: { name: first } };
+  job.quote.splice(1, 1, { key: "membrane.converted.0", params: {} });
+  return { ...job, id: o.id, kind: "build", received: day, expires: day + 1, due: day + 4 };
 }

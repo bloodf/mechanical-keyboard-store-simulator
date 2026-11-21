@@ -104,6 +104,8 @@ export class WorkshopScene implements GameScene {
   private benchSize = { w: 0.33, d: 0.12 };
   private insets = { left: 0, top: 0, bottom: 0, right: 0 };
   private busyT = 0;
+  private attract = false;
+  private t = 0;
   private matTex: DynamicTexture;
   private dome: Mesh;
   /** Resolves when the environment and the bench are loaded. */
@@ -305,8 +307,21 @@ export class WorkshopScene implements GameScene {
     return base.subtract(right.scale(ox * upp)).add(up.scale(oy * upp));
   }
 
+  /** Title screen: a slow look around the workshop. */
+  setAttract(on: boolean) {
+    this.attract = on;
+    this.busyT = 2;
+  }
+
   private updateCameraWants() {
     const w = this.want;
+    if (this.attract) {
+      w.alpha = Math.PI / 2 + Math.sin(this.t * 0.08) * 0.35;
+      w.beta = 1.12;
+      w.radius = 0.95;
+      w.target = new Vector3(0.12, BENCH_TOP + 0.2, 0.05);
+      return;
+    }
     const anchor = this.benchAnchor.getAbsolutePosition();
     const view = this.benchView;
     w.alpha = Math.PI / 2;
@@ -363,10 +378,11 @@ export class WorkshopScene implements GameScene {
 
   // ---------------- Frame ----------------
   isBusy() {
-    return this.busyT > 0 || !this.cameraSettled();
+    return this.attract || this.busyT > 0 || !this.cameraSettled();
   }
 
   update(dt: number) {
+    this.t += dt;
     if (this.busyT > 0) this.busyT -= dt;
     this.updateCameraWants();
     const cam = this.camera;

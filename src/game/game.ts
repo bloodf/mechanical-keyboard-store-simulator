@@ -1,39 +1,39 @@
 /**
- * Game orchestrator: boot → title → character creation → walking around the shop → bench / job board
- * → delivery. Owns the save (tamper checks), the single-tab rule, autosave and dev hooks.
+ * Game orchestrator: boot → title → workshop setup → the workshop (bench + orders, stock, suppliers, mail)
+ * → end of day → next morning. Owns the save (tamper checks), the single-tab rule, autosave, the
+ * workshop clock and dev hooks.
  */
 import { play, unlockAudio } from "../audio/engine";
-import { newSession } from "../build/session";
-import type { JobRequest } from "../build/types";
-import { Rng } from "../core/rng";
-import type { GameState } from "../core/state";
-import { randomAvatar, type AvatarParams } from "../data/avatar";
+import type { BuildResult } from "../build/scoring";
+import { give, starterKit } from "../build/stock";
+import type { BuildSession } from "../build/types";
+import { advance, isClosingTime, nextDay, startGame, type DayReport, type ShipOutcome, type WorkshopEvent } from "../build/workshop";
+import { DAY_END, nowAbs, type GameState } from "../core/state";
 import { getCatalog } from "../data/catalog";
+import { CASE_MATERIALS, PCBS, PLATES, STABS } from "../data/parts";
 import { GameApp } from "../engine/app";
+import { Board } from "../engine/keyboard/board";
 import { CheaterScene } from "../engine/cheaterScene";
-import { StoreScene } from "../engine/store/storeScene";
-import type { InteractId } from "../engine/store/storeBuilder";
+import { loadSwitchModels } from "../engine/keyboard/switchModels";
+import { WorkshopScene } from "../engine/workshop/workshopScene";
 import { showCheater } from "../gui/screens/cheater";
-import { createHud, type Hud } from "../gui/screens/hud";
-import { showProfileEditor } from "../gui/screens/profile";
+import { showProfileForm } from "../gui/screens/profile";
 import { openSettings } from "../gui/screens/settings";
 import { openSoundBoard } from "../gui/screens/soundBoard";
 import { confirmNewGame, showTitle } from "../gui/screens/title";
+import { createWorkshopHud, type WorkshopHud } from "../gui/screens/workshopHud";
 import { C, S, T } from "../gui/theme";
-import { button, H_CENTER, label, stack, V_BOTTOM } from "../gui/widgets";
-import { t } from "../i18n";
+import { button, group, H_CENTER, label, stack, V_BOTTOM } from "../gui/widgets";
+import { formatMoney, t } from "../i18n";
 import { defaultStorage, KEYS, SaveManager } from "../save/saveManager";
 import { BenchMode } from "./bench/bench";
-import { openJobBoard } from "./jobBoard";
-import { showResults } from "./results";
 import { minigameRegistry } from "./bench/games/common";
-
-const touch = matchMedia("(pointer: coarse)").matches;
-
-export function avatarForJob(job: JobRequest): AvatarParams {
-  const r = new Rng(`customer/${job.id}/${job.customer.name}`);
-  return randomAvatar(() => r.next());
-}
+import type { SupplierPreset } from "./bench/types";
+import { openMail, mailFrom } from "./panels/mail";
+import { openOrders } from "./panels/orders";
+import { openStock } from "./panels/stock";
+import { openSuppliers } from "./panels/suppliers";
+import { showShipped } from "./results";
 
 export class Game {
   readonly app: GameApp;
@@ -41,14 +41,16 @@ export class Game {
   private kv;
   private persistent: boolean;
   state: GameState | null = null;
-  store: StoreScene | null = null;
-  private hud: Hud | null = null;
+  ws: WorkshopScene | null = null;
+  private hud: WorkshopHud | null = null;
   bench: BenchMode | null = null;
   private offTitle: (() => void) | null = null;
-  private closeProfile: (() => void) | null = null;
   private suspended = false;
   private lastSave = performance.now();
   private unlockAll = false;
+  private panelOpen = false;
+  private pendingDone: (() => void) | null = null;
+  private showcase: Board | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.app = new GameApp(canvas);
@@ -65,10 +67,17 @@ export class Game {
     window.addEventListener("pagehide", () => this.persist());
     this.singleTab();
     if (import.meta.env.DEV) this.devHooks();
+    void loadSwitchModels();
   }
 
   private get builds() {
     return this.unlockAll ? 999 : (this.state?.stats.keyboardsBuilt ?? 0);
+  }
+  private get catalog() {
+    return getCatalog(this.state!.seed);
+  }
+  private get ui() {
+    return this.ws!.ui;
   }
 
   // ---------------- Save ----------------
@@ -91,7 +100,8 @@ export class Game {
       location.reload();
       return false;
     }
-    if (res === "failed") this.store?.ui.toast(t("hud.saveFailed"), "error");
+    if (res === "failed") this.ws?.ui.toast(t("hud.saveFailed"), "error");
+    this.hud?.update();
     return true;
   }
 
@@ -112,7 +122,7 @@ export class Game {
   private suspend() {
     if (this.suspended) return;
     this.suspended = true;
-    const ui = this.store?.ui;
+    const ui = this.ws?.ui;
     if (ui)
       ui.modal({ w: 520, h: 260, name: "other-tab" }, (p) => {
         const col = stack({ w: "86%", y: S.xl, ha: H_CENTER, spacing: S.sm });
@@ -121,7 +131,6 @@ export class Game {
         p.addControl(col);
         p.addControl(button(t("tabs.useHere"), { w: 260, variant: "primary", y: -S.xl, ha: H_CENTER, va: V_BOTTOM, onClick: () => location.reload() }));
       });
-    // Stop rendering once the dialog has actually been drawn (a couple of frames later).
     const scene = this.app.scene?.scene;
     let frames = 0;
     const obs = scene?.onAfterRenderObservable.add(() => {
@@ -142,212 +151,366 @@ export class Game {
       return;
     }
     this.state = res.kind === "ok" ? res.state : null;
-    this.makeStore();
+    this.makeWorkshop();
     this.goTitle();
   }
 
-  private makeStore() {
+  private makeWorkshop() {
     const s = this.state;
-    const avatar = s?.profile.avatar ?? randomAvatar(Math.random);
-    this.store = new StoreScene(this.app, avatar, s?.profile.storeName || t("profile.defaultStore"));
-    this.app.set(this.store);
-    this.store.onNearbyChange = (id) => this.hud?.setPrompt(id);
-    this.store.onInteract = (id) => this.interact(id);
+    this.ws = new WorkshopScene(this.app, s?.profile.storeName || t("profile.defaultStore"));
+    this.app.set(this.ws);
     if (import.meta.env.DEV) this.devButton();
   }
 
   goTitle() {
     if (!this.persist()) return;
-    const store = this.store!;
-    this.leaveModes();
-    store.setMode("attract");
-    this.offTitle = showTitle(store.ui, {
+    const ws = this.ws!;
+    this.leaveWorkshop();
+    ws.setAttract(true);
+    this.makeShowcase();
+    this.offTitle = showTitle(ws.ui, {
       save: this.state,
       persistent: this.persistent,
       version: __APP_VERSION__,
       onContinue: () => this.continueGame(),
-      onNew: () => (this.state ? confirmNewGame(store.ui, () => this.newGame()) : this.newGame()),
-      onSettings: () => openSettings(store.ui, this.app),
+      onNew: () => (this.state ? confirmNewGame(ws.ui, () => this.newGame()) : this.newGame()),
+      onSettings: () => openSettings(ws.ui, this.app),
     });
   }
 
-  private leaveModes() {
+  /** A finished keyboard on the bench behind the title screen (different every time). */
+  private makeShowcase() {
+    this.showcase?.dispose();
+    const ws = this.ws!;
+    const cat = getCatalog(this.state?.seed ?? "TITLE");
+    const pick = <T,>(xs: T[]) => xs[Math.floor(Math.random() * xs.length)];
+    const layout = pick(["60", "65", "75", "tkl"] as const);
+    const b = new Board(ws.scene, layout, ws.shadows);
+    b.base.parent = ws.benchAnchor;
+    const sw = pick(cat.switches.filter((x) => x.family !== "choc"));
+    b.setSwitchLook(sw);
+    const m = pick(CASE_MATERIALS);
+    b.setCase(m, pick(cat.caseColors[m.id]).hex, false);
+    b.setPcb(PCBS[0], false);
+    b.setPlate(PLATES[0], false);
+    b.setStabs(STABS[1], true, false);
+    b.setAllSwitches(true, true);
+    b.setKeycaps(pick(cat.keycaps.filter((k) => k.profile !== "lp")));
+    b.setAllCaps(true, true);
+    b.base.rotation.y = (Math.random() - 0.5) * 0.3;
+    this.showcase = b;
+    const obs = ws.scene.onBeforeRenderObservable.add(() => {
+      if (this.showcase !== b) return ws.scene.onBeforeRenderObservable.remove(obs);
+      b.update(ws.scene.getEngine().getDeltaTime() / 1000);
+    });
+  }
+
+  private leaveWorkshop() {
+    this.showcase?.dispose();
+    this.showcase = null;
     this.offTitle?.();
     this.offTitle = null;
-    this.closeProfile?.();
-    this.closeProfile = null;
     this.bench?.dispose();
     this.bench = null;
     this.hud?.dispose();
     this.hud = null;
-    this.store?.ui.clearOverlay();
+    this.ws?.ui.clearOverlay();
+    this.ws?.ui.setScreen();
   }
 
   private newGame() {
     unlockAudio();
     this.state = this.saves.newGame();
-    const p = this.state.profile;
-    this.store!.setAvatar(p.avatar);
-    this.store!.setStoreName(t("profile.defaultStore"));
-    this.store!.customerLeave("neutral", "idle");
+    startGame(this.state, this.catalog);
+    this.ws!.setStoreName(t("profile.defaultStore"));
     play("progress.dayStart");
-    play("shop.doorBell", { delay: 0.5 });
     this.openProfile(true);
   }
 
   private continueGame() {
     unlockAudio();
-    if (!this.state) return;
-    if (!this.state.profile.created) this.openProfile(true);
-    else this.enterPlay();
+    const s = this.state;
+    if (!s) return;
+    if (s.needsStarterKit) {
+      // saves from the shop-floor version: hand out the starter stock once
+      for (const [sku, n] of Object.entries(starterKit(this.catalog))) give(s.inventory, sku, n);
+      delete s.needsStarterKit;
+      this.persist();
+    }
+    if (!s.profile.created) this.openProfile(true);
+    else this.enterWorkshop();
   }
 
-  // ---------------- Profile editor ----------------
+  // ---------------- Profile ----------------
   openProfile(first: boolean) {
-    const store = this.store!;
     const s = this.state!;
-    this.leaveModes();
-    store.setMode("editor");
-    this.closeProfile = showProfileEditor(store.ui, {
+    if (first) this.leaveWorkshop();
+    showProfileForm(this.ui, {
       first,
       name: s.profile.name,
       storeName: s.profile.storeName,
-      avatar: s.profile.avatar,
-      onAvatar: (a) => store.setAvatar(a),
-      onStoreName: (n) => store.setStoreName(n),
-      onInsets: (l, tp, b, r) => store.setInsets(l, tp, b, r),
+      onStoreName: (n) => this.ws!.setStoreName(n),
       onDone: (p) => {
-        this.closeProfile = null;
         s.profile = { ...p, created: true };
-        store.setAvatar(p.avatar);
-        store.setStoreName(p.storeName);
-        store.setInsets(0, 0, 0, 0);
+        this.ws!.setStoreName(p.storeName);
         this.persist();
         play("progress.unlock");
-        if (first) store.ui.toast(t("profile.welcome", { store: p.storeName, name: p.name }), "good");
-        this.enterPlay();
+        if (first) {
+          this.ui.toast(t("profile.welcome", { store: p.storeName, name: p.name }), "good");
+          this.enterWorkshop();
+        } else this.hud?.update();
       },
     });
   }
 
-  // ---------------- Walking around ----------------
-  enterPlay() {
-    const store = this.store!;
+  // ---------------- The workshop ----------------
+  enterWorkshop() {
+    const ws = this.ws!;
     const s = this.state!;
-    this.leaveModes();
-    store.setMode("play");
-    this.hud = createHud(store.ui, {
+    this.leaveWorkshop();
+    ws.setAttract(false);
+    this.hud = createWorkshopHud(ws.ui, {
       state: s,
-      touch,
-      stick: store.stick,
-      onProfile: () => this.openProfile(false),
-      onSettings: () => openSettings(store.ui, this.app),
+      onOrders: () => this.openOrdersPanel(),
+      onStock: () => this.openStockPanel(),
+      onSuppliers: () => this.openSuppliersPanel(),
+      onMail: () => this.openMailPanel(),
+      onCloseDay: () => this.confirmCloseDay(),
       onMenu: () => this.openMenu(),
-      onJobs: () => this.openJobs(),
-      onInteract: () => store.nearby && this.interact(store.nearby),
     });
-    store.ui.setScreen(this.hud.root);
-    this.hud.setJob(s.activeBuild ? t("hud.activeJob", { name: s.activeBuild.job.customer.name.split(" ")[0], layout: s.activeBuild.job.layout.kind === "exact" ? t(`layout.name.${s.activeBuild.job.layout.id}` as "layout.name.65") : "…" }) : null);
-    this.hud.setPrompt(store.nearby);
-    setTimeout(() => this.hud?.showHint(false), 12000);
-    // The customer waits at the counter while their job is in progress.
-    if (s.activeBuild && !store.customer) store.spawnCustomer(avatarForJob(s.activeBuild.job));
+    this.bench = new BenchMode({
+      ws,
+      state: s,
+      catalog: this.catalog,
+      builds: () => this.builds,
+      hudHeight: () => this.hud?.height ?? 70,
+      persist: () => this.persist(),
+      wake: () => this.app.wake(),
+      onWork: (m) => this.work(m),
+      onWaitCourier: () => this.waitCourier(),
+      onShipped: (b, r, o) => this.shipped(b, r, o),
+      openSuppliers: (p) => this.openSuppliersPanel(p),
+      openOrders: () => this.openOrdersPanel(),
+    });
+    if (isClosingTime(s)) this.dayOver();
   }
 
-  private interact(id: InteractId) {
-    unlockAudio();
-    play("ui.open");
-    if (id === "bench") this.enterBench();
-    else if (id === "jobs") this.openJobs();
-    else this.openProfile(false);
+  /** Hide the bench UI under a panel; restore when it closes. */
+  private panel(open: (onClose: () => void) => void) {
+    if (this.panelOpen) {
+      // a sheet closed but the frame that notices it hasn't run yet: finish that first
+      const sheetOpen = this.ui.overlay.children.some((c) => /^(orders|stock|suppliers|mail)-scrim$/.test(c.name ?? ""));
+      if (sheetOpen) return;
+      this.pendingDone?.();
+    }
+    this.panelOpen = true;
+    this.bench?.setHidden(true);
+    let finished = false;
+    const done = () => {
+      if (finished) return;
+      finished = true;
+      this.pendingDone = null;
+      this.panelOpen = false;
+      this.bench?.setHidden(false);
+      this.hud?.update();
+    };
+    this.pendingDone = done;
+    open(done);
+  }
+
+  private openOrdersPanel(tab?: "new" | "accepted") {
+    const s = this.state!;
+    this.panel((done) => {
+      const sheet = openOrders(this.ui, {
+        state: s,
+        catalog: this.catalog,
+        tab,
+        persist: () => this.persist(),
+        onChanged: () => this.hud?.update(),
+        onStart: (id) => {
+          done();
+          this.bench?.start(id);
+        },
+      });
+      this.onSheetClose("orders", done, sheet.close);
+    });
+  }
+
+  private openStockPanel() {
+    this.panel((done) => {
+      const sheet = openStock(this.ui, { state: this.state!, catalog: this.catalog, onBuy: () => (sheet.close(), setTimeout(() => this.openSuppliersPanel(), 0)) });
+      this.onSheetClose("stock", done, sheet.close);
+    });
+  }
+
+  private openSuppliersPanel(preset?: SupplierPreset) {
+    this.panel((done) => {
+      const sheet = openSuppliers(this.ui, {
+        state: this.state!,
+        catalog: this.catalog,
+        builds: this.builds,
+        preset,
+        persist: () => this.persist(),
+        onOrdered: () => this.hud?.update(),
+        onWait: () => this.waitCourier(),
+      });
+      this.onSheetClose("suppliers", done, sheet.close);
+    });
+  }
+
+  private openMailPanel() {
+    this.panel((done) => {
+      const sheet = openMail(this.ui, { state: this.state!, persist: () => this.persist(), onChanged: () => this.hud?.update() });
+      this.onSheetClose("mail", done, sheet.close);
+    });
+  }
+
+  /** Call `done` when the sheet's modal leaves the overlay (closed by ✕, backdrop or code). */
+  private onSheetClose(name: string, done: () => void, _close: () => void) {
+    const ui = this.ui;
+    const scene = this.ws!.scene;
+    const obs = scene.onBeforeRenderObservable.add(() => {
+      if (!ui.overlay.children.some((c) => c.name === `${name}-scrim`)) {
+        scene.onBeforeRenderObservable.remove(obs);
+        done();
+        this.bench?.render();
+      }
+    });
+  }
+
+  // ---------------- Time ----------------
+  /** Work took `minutes`: move the clock, report deliveries and mail, close at 18:00. */
+  private work(minutes: number) {
+    const s = this.state!;
+    if (minutes <= 0) return;
+    const events = advance(s, minutes);
+    this.persist();
+    this.report(events);
+  }
+
+  private report(events: WorkshopEvent[]) {
+    for (const e of events) {
+      if (e.kind === "delivery") {
+        play("shop.boxDrop");
+        this.ui.toast(t("ws.delivered"), "good");
+      } else if (e.kind === "mail") {
+        play("shop.notification");
+        this.ui.toast(t("ws.newMail", { from: mailFrom(e.mail) }));
+      }
+    }
+    this.hud?.update();
+    this.bench?.render();
+    if (events.some((e) => e.kind === "closing")) this.dayOver();
+  }
+
+  /** Skip ahead to the next express delivery (the courier). */
+  private waitCourier() {
+    const s = this.state!;
+    const now = nowAbs(s);
+    const next = s.shipments.filter((x) => x.express && x.arrives > now).map((x) => x.arrives);
+    if (!next.length) return;
+    const target = Math.min(...next);
+    const endOfDay = (s.day - 1) * 1440 + DAY_END;
+    this.work(Math.min(target, endOfDay) - now);
+  }
+
+  private confirmCloseDay() {
+    this.ui.confirm(t("ws.closeConfirm"), t("ws.closeYes"), t("ws.closeNo"), () => this.endDay(), "confirm-closeday");
+  }
+
+  private dayOver() {
+    this.ui.toast(t("day.closing"));
+    this.endDay();
+  }
+
+  private endDay() {
+    const s = this.state!;
+    play("progress.dayEnd");
+    const report = nextDay(s, this.catalog);
+    this.persist();
+    this.showDayReport(report);
+  }
+
+  private showDayReport(r: DayReport) {
+    const s = this.state!;
+    this.ui.modal({ w: 480, h: 430, name: "day-report" }, (p, close) => {
+      const col = stack({ w: "84%", y: S.xl, ha: H_CENTER, spacing: S.sm });
+      col.addControl(label(`🌙 ${t("day.overTitle", { day: r.day })}`, { size: T.h2, weight: 700, align: H_CENTER }));
+      const line = (k: string, v: string, color: string = C.ink) => {
+        const g = group({ w: "100%", h: 28 });
+        g.addControl(label(k, { size: T.body, weight: 600, color: C.inkSoft }));
+        g.addControl(label(v, { size: T.body, weight: 700, align: 1, color }));
+        col.addControl(g);
+      };
+      line(t("day.shipped"), String(r.shipped));
+      line(t("day.income"), `+${formatMoney(r.income)}`, C.good);
+      line(t("day.expenses"), `−${formatMoney(r.expenses)}`, r.expenses ? C.bad : C.ink);
+      col.addControl(label("", { h: 6 }));
+      col.addControl(label(t("day.tomorrow"), { size: T.h3, weight: 700 }));
+      col.addControl(label(`📋 ${t("ws.newOffers", { count: r.newOffers })}`, { size: T.body }));
+      col.addControl(label(`📦 ${t("day.deliveries", { count: r.deliveries })}`, { size: T.body }));
+      p.addControl(col);
+      p.addControl(
+        button(t("day.open", { day: s.day }), {
+          w: 320,
+          size: "lg",
+          variant: "primary",
+          y: -S.xl,
+          ha: H_CENTER,
+          va: V_BOTTOM,
+          testId: "day-open",
+          onClick: () => {
+            close();
+            play("progress.dayStart");
+            this.ui.toast(t("day.morning", { day: s.day }), "good");
+            this.hud?.update();
+            this.bench?.render();
+          },
+        }),
+      );
+    });
+  }
+
+  // ---------------- Shipping ----------------
+  private shipped(b: BuildSession, r: BuildResult, o: ShipOutcome) {
+    this.hud?.update();
+    showShipped(this.ui, b.job, r, o, () => {
+      this.bench?.clearBoard();
+      this.bench?.render();
+    });
   }
 
   private openMenu() {
-    const store = this.store!;
-    store.ui.modal({ w: 420, h: 380, name: "pause", dismissable: true }, (p, close) => {
+    const ui = this.ui;
+    ui.modal({ w: 420, h: 460, name: "pause", dismissable: true }, (p, close) => {
       const col = stack({ w: "80%", y: S.xl, ha: H_CENTER, spacing: S.md });
       col.addControl(label(t("menu.title"), { size: T.h1, weight: 700, align: H_CENTER }));
       col.addControl(button(t("menu.resume"), { w: "100%", variant: "primary", testId: "menu-resume", onClick: close }));
-      col.addControl(button(t("settings.open"), { w: "100%", testId: "menu-settings", onClick: () => (close(), openSettings(store.ui, this.app)) }));
+      col.addControl(button(t("profile.editTitle"), { w: "100%", testId: "menu-profile", onClick: () => (close(), this.openProfile(false)) }));
+      col.addControl(button(t("settings.open"), { w: "100%", testId: "menu-settings", onClick: () => (close(), openSettings(ui, this.app)) }));
       col.addControl(button(t("menu.quit"), { w: "100%", testId: "menu-quit", onClick: () => (close(), this.goTitle()) }));
       p.addControl(col);
     });
   }
 
-  private openJobs() {
-    const store = this.store!;
-    const s = this.state!;
-    openJobBoard(store.ui, {
-      state: s,
-      catalog: getCatalog(s.seed),
-      builds: this.builds,
-      persist: () => this.persist(),
-      onClose: () => {},
-      onTake: (job) => {
-        s.activeBuild = newSession(job);
-        this.persist();
-        play("ui.confirm");
-        play("shop.doorBell", { delay: 0.3 });
-        store.ui.toast(t("board.customerComing", { name: job.customer.name }), "good");
-        store.spawnCustomer(avatarForJob(job), () => play("voice.talk", { params: { voice: job.customer.voice } }));
-        if (this.bench) {
-          this.bench.dispose();
-          this.enterBench();
-        } else this.enterPlay();
-      },
-    });
-  }
-
-  // ---------------- Workbench ----------------
-  private enterBench() {
-    const store = this.store!;
-    const s = this.state!;
-    this.leaveModes();
-    this.bench = new BenchMode({
-      store,
-      state: s,
-      catalog: getCatalog(s.seed),
-      builds: () => this.builds,
-      persist: () => this.persist(),
-      wake: () => this.app.wake(),
-      onExit: () => {
-        this.bench = null;
-        this.enterPlay();
-      },
-      onNeedJob: () => this.openJobs(),
-      onDelivered: (b, r) => {
-        const mood = r.mood;
-        store.customerLeave(mood === "ecstatic" || mood === "happy" ? "happy" : mood === "meh" ? "neutral" : "angry", mood === "ecstatic" || mood === "happy" ? "happy" : mood === "meh" ? "idle" : "angry");
-        play(r.stars >= 4 ? "progress.goal" : r.stars === 3 ? "ui.confirm" : "progress.reviewBad");
-        const voice = b.job.customer.voice;
-        if (mood === "ecstatic") play("voice.laugh", { params: { voice }, delay: 0.6 });
-        else play(mood === "furious" || mood === "annoyed" ? "voice.angry" : mood === "meh" ? "voice.talk" : "voice.happy", { params: { voice }, delay: 0.6 });
-        showResults(store.ui, b.job, r, () => {
-          play("shop.doorBell");
-          this.bench?.clearBoard();
-          this.bench?.exit();
-        });
-      },
-    });
-  }
-
   // ---------------- Cheater ----------------
   private goCheater(count: number) {
-    this.leaveModes();
+    this.leaveWorkshop();
     this.state = null;
-    this.store = null;
+    this.ws = null;
     const scene = new CheaterScene(this.app);
     this.app.set(scene);
     showCheater(scene.ui, count, () => {
       this.state = this.saves.acceptShame();
-      this.makeStore();
+      startGame(this.state, this.catalog);
+      this.makeWorkshop();
       this.openProfile(true);
     });
   }
 
   // ---------------- Dev tools (npm run dev only) ----------------
   private devButton() {
-    const ui = this.store!.ui;
+    const ui = this.ws!.ui;
     const btn = button("🛠", { w: 44, h: 44, size: "sm", variant: "dark", x: 8, y: -8, va: V_BOTTOM, testId: "dev-tools" });
     btn.onClick = () =>
       ui.modal({ w: 420, h: 520, name: "dev", dismissable: true }, (p, close) => {
@@ -356,8 +519,8 @@ export class Game {
         const act = (k: Parameters<typeof t>[0], id: string, f: () => void) => col.addControl(button(t(k), { w: "100%", size: "sm", testId: id, onClick: () => (close(), f()) }));
         act("debug.autoStep", "dbg-auto", () => this.bench?.autoStep());
         act("debug.unlockAll", "dbg-unlock", () => ((this.unlockAll = !this.unlockAll), ui.toast(`${t("debug.unlockAll")}: ${this.unlockAll ? "ON" : "OFF"}`)));
-        act("debug.addMoney", "dbg-money", () => this.state && ((this.state.money += 100_00), this.persist(), this.hud?.update(), play("money.register")));
-        act("debug.nextDay", "dbg-day", () => this.state && ((this.state.day += 1), this.persist(), this.hud?.update()));
+        act("debug.addMoney", "dbg-money", () => this.state && ((this.state.money += 100_00), this.persist(), play("money.register")));
+        act("debug.nextDay", "dbg-day", () => this.state && this.endDay());
         act("debug.soundBoard", "dbg-sounds", () => openSoundBoard(ui));
         act("debug.tamper", "dbg-tamper", () => {
           for (const key of [KEYS.a, KEYS.b]) {
@@ -384,21 +547,20 @@ export class Game {
   private devHooks() {
     (window as unknown as Record<string, unknown>).__mkss = {
       game: this,
-      find: (name: string) => this.store?.ui.find(name) ?? (this.app.scene as unknown as { ui?: { find(n: string): unknown } })?.ui?.find(name) ?? null,
+      find: (name: string) => this.ws?.ui.find(name) ?? (this.app.scene as unknown as { ui?: { find(n: string): unknown } })?.ui?.find(name) ?? null,
       step: () => this.state?.activeBuild?.step ?? null,
       state: () => this.state,
       autoStep: () => this.bench?.autoStep(),
       keyScreen: (id: number) => {
-        const b = (this.bench as unknown as { board: import("../engine/keyboard/board").Board | null })?.board;
-        return b && this.store ? this.store.toScreen(b.keyWorld(id)) : null;
+        const b = this.bench?.board;
+        return b && this.ws ? this.ws.toScreen(b.keyWorld(id)) : null;
       },
-      keyCount: () => (this.bench as unknown as { board: { layout: { keys: unknown[] } } | null })?.board?.layout.keys.length ?? 0,
+      keyCount: () => this.bench?.board?.layout.keys.length ?? 0,
       faults: () => this.state?.activeBuild?.faults ?? [],
-      mode: () => this.store?.mode ?? null,
-      settled: () => this.store?.cameraSettled() ?? true,
+      mode: () => (this.hud ? "workshop" : "title"),
+      settled: () => this.ws?.cameraSettled() ?? true,
       minigame: () => minigameRegistry.current?.debugPoints() ?? null,
       minigameObj: () => minigameRegistry.current,
-      player: () => this.store?.controller.pos.asArray() ?? null,
     };
     void import("../audio/engine").then((engine) =>
       import("../audio/library").then((lib) => ((window as unknown as Record<string, unknown>).__mkssAudio = { renderOffline: engine.renderOffline, ids: lib.SFX_IDS })),

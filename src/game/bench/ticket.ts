@@ -1,12 +1,12 @@
 /** The customer's job ticket (quote, wishes, bill, live sound preview). */
 import type { Control } from "@babylonjs/gui";
-import { play } from "../../audio/engine";
 import { computeProfile, partsCost, soundMatch, targetRanges } from "../../build/profile";
-import type { BuildSession, JobRequest } from "../../build/types";
+import type { BuildSession, JobRequest, Order } from "../../build/types";
 import type { Catalog } from "../../data/catalog";
 import { formatMoney, t, tx, type MessageKey } from "../../i18n";
 import { C, R, S, T } from "../../gui/theme";
 import { button, chip, drawBox, group, H_RIGHT, label, panel, stack } from "../../gui/widgets";
+void group;
 import { radarPainter } from "./radar";
 
 export function quoteText(job: JobRequest): string {
@@ -15,6 +15,7 @@ export function quoteText(job: JobRequest): string {
 
 export function wantsList(job: JobRequest): string[] {
   const out: string[] = [];
+  const w = job.wants;
   out.push(job.layout.kind === "exact" ? t(`layout.name.${job.layout.id}` as MessageKey) : t(`req.layout.${job.layout.kind}` as MessageKey));
   out.push(job.sound.map((w) => t(`sound.word.${w}` as MessageKey)).join(" + "));
   if (job.feel !== "any") out.push(t(`feel.${job.feel}` as MessageKey));
@@ -24,6 +25,10 @@ export function wantsList(job: JobRequest): string[] {
       ? t("req.theme.any")
       : tx(`req.theme.${th.kind}`, { ...(th.kind !== "hue" ? { family: `@color.family.${th.family}` } : {}), ...(th.kind !== "family" ? { hue: `@color.hue.${th.hue}` } : {}) }),
   );
+  if (w?.profile) out.push(`★ ${t("orders.want.profile", { profile: t(`part.keycap.profile.${w.profile}` as MessageKey) })}`);
+  if (w?.lowProfile) out.push(`★ ${t("orders.want.lowProfile")}`);
+  if (w?.hotswap) out.push(`★ ${t("orders.want.hotswap")}`);
+  if (w?.caseMaterial) out.push(`★ ${t("orders.want.case", { material: t(`part.case.${w.caseMaterial}` as MessageKey) })}`);
   if (job.picky > 0.7) out.push(`⚠ ${t("req.picky")}`);
   return out;
 }
@@ -51,16 +56,25 @@ export function chipsWrap(items: string[], w: number): Control {
   return col;
 }
 
-export function ticketPanel(job: JobRequest, b: BuildSession | null, cat: Catalog, o: { w: number; h: number; onHide?: () => void; withRadar?: boolean }): Control {
+/** "Due in 2 days" / "1 day late!" */
+export function dueText(job: Order, day: number): { text: string; late: boolean } {
+  const left = job.due - day;
+  return left < 0 ? { text: t("orders.late", { count: -left }), late: true } : { text: t("orders.dueIn", { count: left }), late: false };
+}
+
+export function ticketPanel(job: Order, b: BuildSession | null, cat: Catalog, o: { w: number; h: number; day: number; onHide?: () => void; withRadar?: boolean }): Control {
   const p = panel({ w: o.w, h: o.h, radius: R.lg, name: "ticket" });
   const inner = o.w - 2 * S.lg;
   const col = stack({ w: inner, x: S.lg, y: S.md, spacing: S.xs });
   const head = group({ w: inner, h: 34 });
   head.addControl(label(job.customer.name, { size: T.h3, weight: 700, w: inner - 80, h: 30 }));
-  head.addControl(button("🔊", { w: 36, h: 32, size: "sm", ha: H_RIGHT, x: o.onHide ? -40 : 0, testId: "ticket-listen", onClick: () => play("voice.talk", { params: { voice: job.customer.voice } }) }));
   if (o.onHide) head.addControl(button("✕", { w: 36, h: 32, size: "sm", ha: H_RIGHT, testId: "ticket-hide", onClick: o.onHide }));
   col.addControl(head);
-  col.addControl(chip(t(`persona.${job.customer.persona}` as MessageKey), { bg: C.paper3, size: T.tiny + 1, h: 24 }));
+  const meta = stack({ horizontal: true, h: 24, spacing: 6 });
+  meta.addControl(chip(t(`persona.${job.customer.persona}` as MessageKey), { bg: C.paper3, size: T.tiny + 1, h: 24 }));
+  const due = dueText(job, o.day);
+  meta.addControl(chip(`📅 ${due.text}`, { bg: due.late ? C.bad : C.blueSoft, color: due.late ? C.white : C.blue, size: T.tiny + 1, h: 24 }));
+  col.addControl(meta);
   col.addControl(label(`“${quoteText(job)}”`, { size: T.small, italic: true, wrap: true, color: C.ink }));
   col.addControl(chipsWrap(wantsList(job), inner));
   if (b) {

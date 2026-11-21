@@ -12,6 +12,8 @@ export class Ui {
   readonly adt: AdvancedDynamicTexture;
   /** Current screen content (title, HUD, bench panels…). */
   readonly screen: Container;
+  /** Persistent bar above the screen layer (the workshop HUD). */
+  readonly hud: Container;
   /** Always-on-top layer for modals. */
   readonly overlay: Container;
   private toasts: StackPanel;
@@ -27,6 +29,8 @@ export class Ui {
     // UI must not go through tone mapping / bloom: keep its colors exact.
     if (this.adt.layer) this.adt.layer.applyPostProcess = false;
     this.screen = new Container("screen");
+    this.hud = new Container("hud-layer");
+    this.hud.isHitTestVisible = false;
     this.overlay = new Container("overlay");
     this.overlay.isPointerBlocker = false;
     // Layout layers must not swallow pointer events (Babylon containers do when hit-testable).
@@ -40,6 +44,7 @@ export class Ui {
     this.toasts.isPointerBlocker = false;
     this.toasts.isHitTestVisible = false;
     this.adt.addControl(this.screen);
+    this.adt.addControl(this.hud);
     this.adt.addControl(this.overlay);
     this.adt.addControl(this.toasts);
     this.fit();

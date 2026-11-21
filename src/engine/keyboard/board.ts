@@ -672,7 +672,9 @@ export class Board {
     const m = this.holePlate("plate", this.stack.plateT);
     let tex: Texture | undefined;
     if (def.id === "carbon") tex = this.carbonTexture();
-    m.material = this.pbr(`plate-${def.id}`, def.color, { metal: def.metalness, rough: def.roughness, alpha: def.id === "pc" ? 0.7 : undefined, tex });
+    const metal = def.metalness > 0.5;
+    const hex = metal ? Color3.FromHexString(def.color).scale(0.82).toHexString() : def.color;
+    m.material = this.pbr(`plate-${def.id}`, hex, { metal: def.metalness, rough: metal ? Math.max(0.42, def.roughness) : def.roughness, alpha: def.id === "pc" ? 0.7 : undefined, tex });
     this.shadows?.addShadowCaster(m);
     this.plateMesh = m;
     if (animate) this.drop(m, 0);
@@ -889,14 +891,10 @@ export class Board {
     });
     tex.update();
     this.owned.push(tex);
-    const rough = set.material === "pbt" ? 0.72 : set.material === "abs" ? 0.3 : 0.5;
+    const rough = set.material === "pbt" ? 0.7 : set.material === "abs" ? 0.4 : 0.52;
     const mat = this.pbr(`caps-${set.id}`, "#ffffff", { rough, tex });
     mat.albedoColor = Color3.White();
-    if (set.material === "abs") {
-      mat.clearCoat.isEnabled = true;
-      mat.clearCoat.intensity = 0.25;
-      mat.clearCoat.roughness = 0.25;
-    }
+    mat.environmentIntensity = 0.85;
     const profile = PROFILE_GEO[set.profile] ? set.profile : "cherry";
     const capZ = this.geo.capZ;
     const cache = new Map<string, VertexData>();

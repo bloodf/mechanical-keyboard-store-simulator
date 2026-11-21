@@ -579,15 +579,16 @@ def bench_props(M):
     objs.append(shade)
     # parts tray (right)
     tray_mat = principled("tray", "#d9dde2", roughness=0.35, metallic=0.6)
-    objs.append(bx("tray", (0.2, 0.13, 0.02), (0.45, 0.05, z + 0.01), tray_mat, bevel=0.004))
+    objs.append(bx("tray", (0.2, 0.13, 0.02), (0.63, 0.12, z + 0.01), tray_mat, bevel=0.004))
     # switch tester (small 3×3 block) and a keycap puller on the bench
-    objs.append(bx("tester-base", (0.07, 0.07, 0.012), (0.43, -0.16, z + 0.006), M["black"], bevel=0.003))
+    objs.append(bx("tester-base", (0.07, 0.07, 0.012), (0.6, -0.18, z + 0.006), M["black"], bevel=0.003))
     # mug
     mug_m = principled("mug", "#e8e3d8", roughness=0.25)
-    objs.append(cyl("mug", 0.04, 0.095, (-0.5, -0.1, z), mug_m, seg=40, bevel=0.003))
-    handle = tube("mug-handle", [(-0.46, -0.1, z + 0.075), (-0.43, -0.1, z + 0.07), (-0.425, -0.1, z + 0.045), (-0.43, -0.1, z + 0.025), (-0.46, -0.1, z + 0.022)], 0.006, mug_m, res=2)
+    mx = -0.62
+    objs.append(cyl("mug", 0.04, 0.095, (mx, -0.1, z), mug_m, seg=48, bevel=0.003))
+    handle = tube("mug-handle", [(mx + 0.038, -0.1, z + 0.075), (mx + 0.062, -0.1, z + 0.072), (mx + 0.07, -0.1, z + 0.05), (mx + 0.062, -0.1, z + 0.028), (mx + 0.038, -0.1, z + 0.024)], 0.0055, mug_m, res=3)
     objs.append(handle)
-    objs.append(cyl("coffee", 0.036, 0.002, (-0.5, -0.1, z + 0.085), principled("coffee", "#3b2414", 0.1), seg=32))
+    objs.append(cyl("coffee", 0.036, 0.002, (mx, -0.1, z + 0.085), principled("coffee", "#3b2414", 0.1), seg=32))
     return objs
 
 

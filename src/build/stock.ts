@@ -11,7 +11,9 @@
  * Prices are integer cents (unit price). Framework-free: used by the UI and by tests.
  */
 import type { Catalog } from "../data/catalog";
-import { getLayout, type LayoutId } from "../data/layouts";
+import { getLayout, LAYOUT_IDS, type LayoutId } from "../data/layouts";
+import { PROFILE_GEO } from "../data/profiles";
+import type { JobRequest } from "./types";
 import { CASE_MATERIALS, DAMPENING, LAYOUT_PRICE_FACTOR, PCBS, PLATES, STABS, type CaseMaterial } from "../data/parts";
 import type { CapMount, SwitchFamily } from "../data/profiles";
 import { MOUNT_OF_FAMILY } from "../data/profiles";
@@ -173,4 +175,67 @@ export function stockValue(inv: Inventory, cat: Catalog): number {
   let v = 0;
   for (const [sku, n] of Object.entries(inv)) v += (unitPrice(sku, cat) ?? 0) * n;
   return v;
+}
+
+// ---------------------------------------------------------------- can this order be built from the shelf?
+export type SlotKind = "case" | "pcb" | "stab" | "sw" | "kc";
+
+/**
+ * Parts still missing to build an order from the current stock (best layout/footprint option).
+ * Plates and foams are optional (plateless builds exist), lube can be skipped.
+ */
+export function missingFor(o: JobRequest, inv: Inventory, cat: Catalog): SlotKind[] {
+  const layouts = LAYOUT_IDS.filter((l) => layoutFits(o.layout, l));
+  const fps: Footprint[] = o.wants?.lowProfile ? ["choc"] : ["mx", "choc"];
+  const skus = Object.keys(inv).filter((k) => inv[k] > 0);
+  let best: SlotKind[] | null = null;
+  for (const l of layouts) {
+    for (const fp of fps) {
+      const miss: SlotKind[] = [];
+      const hasCase = skus.some((k) => {
+        const s = parseSku(k)!;
+        return s.kind === "case" && s.layout === l && (!o.wants?.caseMaterial || s.id === o.wants.caseMaterial);
+      });
+      if (!hasCase) miss.push("case");
+      const hasPcb = skus.some((k) => {
+        const s = parseSku(k)!;
+        return s.kind === "pcb" && s.layout === l && s.fp === fp && (!o.wants?.hotswap || PCBS.find((p) => p.id === s.id)?.hotswap);
+      });
+      if (!hasPcb) miss.push("pcb");
+      if (!skus.some((k) => k.startsWith("stab/") && k.endsWith(`/${fp}`))) miss.push("stab");
+      const need = switchesNeeded(l);
+      const hasSw = skus.some((k) => {
+        if (!k.startsWith("sw/")) return false;
+        const sw = cat.switches.find((x) => x.id === k.slice(3));
+        return !!sw && MOUNT_OF_FAMILY[sw.family] === fp && inv[k] >= need;
+      });
+      if (!hasSw) miss.push("sw");
+      const hasKc = skus.some((k) => {
+        if (!k.startsWith("kc/")) return false;
+        const kc = cat.keycaps.find((x) => x.id === k.slice(3));
+        return !!kc && PROFILE_GEO[kc.profile].mount === fp && (!o.wants?.profile || kc.profile === o.wants.profile);
+      });
+      if (!hasKc) miss.push("kc");
+      if (!best || miss.length < best.length) best = miss;
+      if (!miss.length) return [];
+    }
+  }
+  return best ?? ["case", "pcb", "stab", "sw", "kc"];
+}
+
+function layoutFits(req: JobRequest["layout"], id: LayoutId): boolean {
+  switch (req.kind) {
+    case "exact":
+      return req.id === id;
+    case "compact":
+      return id === "40" || id === "60" || id === "65";
+    case "arrows":
+      return id !== "40" && id !== "60";
+    case "frow":
+      return id === "75" || id === "tkl" || id === "full";
+    case "numpad":
+      return id === "full";
+    case "any":
+      return true;
+  }
 }

@@ -1,5 +1,7 @@
-// Plays a full keyboard build with REAL input through every 3D minigame, delivers it, then checks
-// that a half-finished build resumes after a reload. Needs `npm run dev` running.
+// The workshop loop with REAL input: accept an order, buy a part from the supplier (express),
+// build through every 3D minigame (waiting for the courier when the part isn't there yet),
+// ship it, get the review by mail, close the day, and resume a half-finished build after a reload.
+// Needs `npm run dev` running.
 const { ok, launch, newGamePage } = require("./helpers.cjs");
 
 (async () => {
@@ -33,21 +35,42 @@ const { ok, launch, newGamePage } = require("./helpers.cjs");
   await g.open();
   await g.click("btn-new");
   await g.click("profile-done");
-  await g.click("hud-jobs");
-  await g.click("take-0");
-  await page.waitForTimeout(800);
-  await g.ev(() => window.__mkss.game.interact("bench"));
-  await g.waitFor("drawer");
-  ok((await g.step()) === "case", "taking a job and going to the bench starts at the case step");
+  await g.waitFor("hud-bar");
 
-  // Case: layout → material → color (tabs advance by themselves)
-  await g.click("subtab-layout");
-  await g.clickTile("layout-65");
-  await g.clickTile("case-aluminum");
-  await g.waitFor("subtab-color");
-  ok((await build()).caseColor !== null, "case layout, material and color chosen");
+  // Orders: accept the first request
+  await g.click("nav-orders");
+  await g.click("accept-0");
+  ok((await g.state()).accepted.length === 1, "order accepted");
+  await g.click("orders-close");
+
+  // Suppliers: a solder PCB for this 65%, express
+  await g.click("nav-suppliers");
+  await g.click("suptab-pcb");
+  await g.click("suplayout-65");
+  await g.click("add-pcb_solder_65_mx");
+  await g.click("ship-express");
+  const money0 = (await g.state()).money;
+  await g.click("sup-order");
+  const st0 = await g.state();
+  ok(st0.money < money0 && st0.shipments.length === 1 && st0.shipments[0].express, "express supplier order paid and on its way");
+  await g.click("suppliers-close");
+  await page.waitForTimeout(600);
+
+  // Start building from the idle bench card
+  await g.click("start-order.0");
+  await g.waitFor("drawer");
+  ok((await g.step()) === "case", "building starts at the case step");
+  await g.clickTile("case-case_plastic_65_black");
+  ok((await build()).caseMaterial === "plastic", "case taken from stock");
+  ok(!(await g.state()).inventory["case/plastic/65/black"], "…and it left the shelf");
   await next();
-  await g.clickTile("pcb-solder");
+
+  // PCB: the solder PCB is still on the truck → wait for the courier
+  ok(!(await g.state()).inventory["pcb/solder/65/mx"], "the solder PCB hasn't arrived yet");
+  await g.click("btn-wait");
+  await waitDone(async () => ((await g.state()).inventory["pcb/solder/65/mx"] ?? 0) === 1, "courier");
+  ok(true, "waited for the courier: the PCB arrived");
+  await g.clickTile("pcb-pcb_solder_65_mx");
   await next();
 
   // Dampening + 3D tape mod: drag across each lane of the flipped PCB
@@ -67,11 +90,11 @@ const { ok, launch, newGamePage } = require("./helpers.cjs");
   ok((await build()).tapeQuality > 0.6, `tape laid on the 3D PCB (quality ${Math.round((await build()).tapeQuality * 100)}%)`);
   await g.shot("build-1-tape");
   await next();
-  await g.clickTile("plate-pom");
+  await g.clickTile("plate-plate_aluminum_65_mx");
   await next();
 
-  // Stabilizers + 3D wire lubing: drag the brush along each wire
-  await g.clickTile("stabs-standard");
+  // Stabilizers + 3D wire lubing
+  await g.clickTile("stabs-stab_standard_mx");
   await g.clickTile("stabmod-clip");
   await g.click("stab-lube");
   await page.waitForTimeout(1500);
@@ -85,10 +108,11 @@ const { ok, launch, newGamePage } = require("./helpers.cjs");
   await waitDone(async () => (await build()).stabLube !== null, "wire minigame");
   ok((await build()).stabLube > 0.5, `stabilizer wires lubed in 3D (${Math.round((await build()).stabLube * 100)}%)`);
   await next();
-  await g.clickTile("switch-sw.0");
+  const sw = Object.keys((await g.state()).inventory).find((k) => k.startsWith("sw/")).slice(3);
+  await g.clickTile(`switch-${sw}`);
   await next();
 
-  // Lube: hold the HOLD button for ~1.5 s per switch (linear zone 0.55–0.8)
+  // Lube: hold the HOLD button for ~1.5 s per switch
   ok((await g.step()) === "lube", "lube step");
   await page.waitForTimeout(2500);
   for (let i = 0; i < 5; i++) {
@@ -130,7 +154,7 @@ const { ok, launch, newGamePage } = require("./helpers.cjs");
   await g.shot("build-3-solder");
   await next();
 
-  // Screws: hold each screw ~0.93 s (torque 0.75/s → green zone 0.6–0.82)
+  // Screws: hold each screw ~0.93 s
   await page.waitForTimeout(1500);
   await settle();
   for (let i = 0; i < 8; i++) {
@@ -145,7 +169,8 @@ const { ok, launch, newGamePage } = require("./helpers.cjs");
   await waitDone(async () => (await build()).screws !== null, "screws");
   ok((await build()).screws.quality > 0.5, `case screwed shut in 3D (${Math.round((await build()).screws.quality * 100)}%)`);
   await next();
-  await g.clickTile("keycaps-kc.0");
+  const kc = Object.keys((await g.state()).inventory).find((k) => k.startsWith("kc/")).slice(3);
+  await g.clickTile(`keycaps-${kc}`);
   await page.waitForTimeout(3000);
   await g.shot("build-4-keycaps");
   await next();
@@ -170,47 +195,63 @@ const { ok, launch, newGamePage } = require("./helpers.cjs");
   await g.shot("build-5-test");
   await next();
 
-  // Sound check + deliver
+  // Sound check → pack & ship
   await g.click("autotype");
   await page.waitForTimeout(6000);
   await waitDone(async () => (await build()).soundChecked, "sound check");
   await g.shot("build-6-sound");
+  await next();
+  ok((await g.step()) === "deliver", "pack & ship step");
   const before = (await g.state()).money;
   await g.click("btn-next");
-  await g.waitFor("result-stars");
-  await page.waitForTimeout(2000);
-  await g.shot("build-7-result");
+  await g.waitFor("qa-sound");
+  await page.waitForTimeout(1500);
+  await g.shot("build-7-shipped");
   const st = await g.state();
-  ok(st.activeBuild === null && st.history.length === 1 && st.money !== before, `delivered: ${st.history[0].stars}★, profit ${st.history[0].profit / 100}`);
+  ok(st.activeBuild === null && st.history.length === 1 && st.money > before, `shipped: client paid ${(st.money - before) / 100}`);
+  const review = st.mail.find((m) => m.kind === "review" || m.kind === "complaint");
+  ok(review && review.at > (st.day - 1) * 1440 + st.minute, "the client's review is on its way");
+  await g.click("btn-next-customer");
+
+  // Close the day: the review arrives, a new morning brings new orders
+  await g.click("nav-closeday");
+  await g.click("confirm-closeday-yes");
+  await g.waitFor("day-open");
+  await g.shot("build-8-day");
+  await g.click("day-open");
+  const st2 = await g.state();
+  ok(st2.day === 2 && st2.offers.length >= 2, `day 2: ${st2.offers.length} order requests`);
+  await g.click("nav-mail");
+  await g.waitFor("mail-open");
+  await g.shot("build-9-mail");
+  ok((await g.state()).mail.some((m) => (m.kind === "review" || m.kind === "complaint") && m.read), "review read in the mail");
+  await g.click("mail-close");
+  await page.waitForTimeout(600);
 
   // Resume a half-finished build after reload
-  await g.click("btn-next-customer");
-  await g.waitFor("hud-plate");
-  await g.click("hud-jobs");
-  await g.click("take-0");
-  await page.waitForTimeout(800);
-  await g.ev(() => window.__mkss.game.interact("bench"));
+  await g.click("nav-orders");
+  await g.click("accept-0");
+  await g.click("orders-tab-accepted");
+  await g.click("start-0");
   await g.waitFor("drawer");
-  await g.click("subtab-layout");
-  await g.clickTile("layout-tkl");
-  await g.clickTile("case-plastic");
-  await next();
-  await g.clickTile("pcb-hotswap_rgb");
-  await page.waitForTimeout(1500);
+  const tiles = Object.keys((await g.state()).inventory).filter((k) => k.startsWith("case/"));
+  if (tiles.length) {
+    await g.clickTile(`case-${tiles[0].replace(/\//g, "_")}`);
+    await page.waitForTimeout(1500);
+  }
+  const chosen = (await build()).caseMaterial;
   await page.reload();
   await page.waitForFunction(() => window.__mkss, null, { timeout: 180000 });
   await g.click("btn-continue");
-  await g.waitFor("hud-plate");
-  await g.ev(() => window.__mkss.game.interact("bench"));
   await g.waitFor("drawer");
-  ok((await g.step()) === "pcb" && (await build()).pcb === "hotswap_rgb", "a half-finished build resumes at the same step with its choices");
+  ok((await g.step()) === "case" && (await build()).caseMaterial === chosen, "a half-finished build resumes with its choices");
   await page.waitForTimeout(2000);
-  await g.shot("build-8-resumed");
+  await g.shot("build-10-resumed");
 
   const errs = g.realErrors();
   ok(errs.length === 0, "no page errors" + (errs.length ? ": " + errs.join(" | ") : ""));
   await browser.close();
-  console.log("\nBuild e2e passed (real input through every 3D minigame).");
+  console.log("\nWorkshop e2e passed (orders → suppliers → every 3D minigame → ship → mail → next day → resume).");
 })().catch((e) => {
   console.error(e);
   process.exit(1);
