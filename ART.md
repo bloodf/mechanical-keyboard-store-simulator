@@ -1,57 +1,57 @@
-# Art direction & asset pipeline (v0.3 plan)
+# Art direction & asset pipeline (v0.3)
 
-## Why the current assets look cheap
-- Characters and props are stacks of **primitives** (capsules, spheres, boxes) with flat colors. No designed
-  silhouettes, no edge bevels, no surface detail, no material variety.
-- No **baked lighting / ambient occlusion**, so objects float and everything looks equally lit.
-- Proportions were "correct" numerically but not **designed**, which gives the mannequin look.
-- The keyboard was a rough approximation (rounded boxes with a taper), not real geometry.
-
-## Direction: "the real deal, with a funny approach"
-- **Real**: believable objects at real scale, modeled like production game assets: designed meshes, bevels,
-  proper normals, PBR materials with surface detail (PBT grain, bead-blasted aluminum, wood, fabric),
-  baked lighting for the shop.
-- **Funny**: from *content and performance*, not from broken models. That means joke brands and packaging,
-  posters and signage, expressive faces and exaggerated animation (stomps, happy jumps, dramatic sighs), and
-  slightly stylized (not realistic) characters.
-- **Keyboard = 100% accurate**: modeled from published dimensions. See the spec table below.
+## Direction: "the real deal, calm"
+- **Real**: objects at real scale, modeled like production assets (lofts, booleans, bevels, weighted normals), PBR
+  materials lit by an image-based environment, soft shadows.
+- **The keyboard is 100 % accurate**: modeled from published dimensions (table below).
+- **Funny** comes from writing (orders, membrane requests, reviews, joke brands), not from crude models.
 
 ## Pipeline
-- Assets are modeled **by scripts in Blender 5.2 LTS** (`art/blender/*.py`, run with the `bpy` module) using real
-  modeling tools (bmesh topology, lofts, booleans, bevels, subdivision, weighted normals, rigs and shape keys) and
-  rendered/baked with Cycles.
-- Exported as **glTF (.glb)** into `public/assets/` and loaded by Babylon.js at runtime. The generated files are
-  committed, so the game builds without Blender. `npm run art` regenerates them.
-- Still "everything generated in code": no downloaded or hand-made assets, and reproducible from the scripts.
-- Runtime variety stays procedural: colors, materials, shape-key weights, part swaps (hair, clothes, accessories),
-  generated colorways/brands. Every customer and build is still different.
+- Assets are **modeled by Python scripts in Blender 5.2 LTS** (`art/blender/*.py`, run with the `bpy` module:
+  `~/.venvs/bpy/bin/python art/blender/<script>.py`). Everything stays "generated in code", reproducible, no downloads.
+- Output in `public/assets/` (committed, so the game builds without Blender):
 
-## Keyboard spec used (mm)
+| File | Made by | What |
+|---|---|---|
+| `models/switch_mx.glb`, `switch_box.glb`, `switch_choc.glb` | `export_switches.py` (+ `switches.py`) | Every switch part as a named node: top housing (hollow, stem opening, LED window, latch windows), bottom housing (3- and 5-pin, plate clips, center post), gold pins, leaf, closed-end spring (+ low-poly spring), click jacket, stems per type (linear / tactile bumps / clicky / silent pads), Box wall; Choc housing + twin-rail stems |
+| `models/bench.glb` | `workshop.py bench` | Butcher-block bench top, steel legs & shelf, articulated desk lamp, mug, parts tray, tester |
+| `env/workshop_bg.jpg` | `workshop.py pano` + `pano_post.py` | 360° Cycles render of the workshop from the bench (background) |
+| `env/workshop.env` | `pano_post.py` + `tests/e2e/make_env.cjs` | Prefiltered environment (image-based lighting and reflections) |
+
+- The workshop room (walls, wainscot, window with daylight, pegboard with tools, shelves with stock boxes, poster,
+  clock, packing table, door, pendant lights) only exists in the panorama: the camera never leaves the bench, so the
+  room costs one texture. The bench and its props are real meshes so the keyboard sits on them and casts shadows.
+- **Keycaps are generated at runtime** (`src/engine/keyboard/keycapGeo.ts`, a TypeScript port of `art/blender/keycap.py`):
+  every size, row and profile, with legends projected from an atlas onto the dish. **Cases, plates, PCBs, foams and
+  stabilizers are generated at runtime** too (`board.ts`), from the layout. **Switches** come from the glb files
+  (thin-instanced: one draw call per part for the whole board).
+- Babylon loads the glb files with a small reader (`src/engine/glb.ts`) — the official loader package lags behind
+  the Babylon core version we use.
+- Previews: `sandbox.html?view=workshop|caps|board2` (Babylon), `art/previews/` (Cycles renders), `npm run art:preview`.
+
+## Keyboard spec (mm)
 | Item | Value |
 |---|---|
-| Key pitch | 19.05 |
-| Keycap base (1u) | 18.0 × 18.0 |
-| Plate cutout | 14.0 × 14.0, plate 1.5 thick |
-| Plate top → PCB top | 5.0, PCB 1.6 thick |
-| MX-style top housing | 15.6 square at the plate, ~6.6 tall; cross stem 4.0 × 1.17, 3.6 above housing; pins at (−3.81, 2.54) and (2.54, 5.08) |
-| Stabilizer wire inserts | ±11.9 (2–2.75u), ±50 (6.25u) |
-| Keycap rest height | skirt ~4.4 above the plate (4 mm travel) |
-| Profiles (top-center height R1/R2/R3/R4, dish) | Cherry 9.4/7.6/7.3/8.4 cyl · OEM 11.9/9.8/9.2/10.0 cyl · SA 14.5/12.2/11.9/12.2 sph · XDA 9.1 uniform sph · MT3-like 13.7/11.3/10.9/11.3 deep sph |
-| Case | 8 bezel, 7° typing angle, flat bottom, USB-C cutout |
+| Key pitch | 19.05 (1u); keycap base 18.0 × 18.0 for 1u |
+| Plate | 1.5 thick (1.2 for Choc); cutouts 14.0 × 14.0 (13.8 Choc); stabilizer cutouts 6.75 × 14 at ±11.9 (2–2.75u) and ±50 (6.25u) |
+| PCB | top 5.0 below the plate top (2.2 for Choc), 1.6 thick; switch footprint pins (−3.81, 2.54) & (2.54, 5.08), Ø4 center post, 5-pin plastic pegs at ±5.08 |
+| MX-style switch | top housing 15.6 square at the plate → 12.2 × 11.6 top, 6.6 tall; cross stem 4.0 × 1.17 / 1.27 arms; stem top 10.2 above the plate; travel 4.0 (Box 3.6) |
+| Choc switch | housing 15.0, 3.0 above the plate; twin rails 1.2 × 3.0, 5.7 apart; travel 3.0; caps float above the housing |
+| Keycap rest | skirt 4.4 above the plate (MX), 5.8 (Choc) |
+| Profiles (top-center height R1/R2/R3/R4, dish) | Cherry 9.4/7.6/7.3/8.4 cyl · OEM 11.9/9.8/9.2/10.0 cyl · SA 14.5/12.2/11.9/12.2 sph · DSA 7.6 uniform sph · XDA 9.1 uniform sph · MT3 13.7/11.3/10.9/11.3 deep sph · KAT 12.6/10.4/9.6/10.4 sph · LP (Choc) 3.5 uniform shallow sph |
+| Cases | plastic tray (fillet, 5°), acrylic sandwich (layer lines, 2°), aluminum top-mount (chamfer, 7°), polycarbonate gasket (translucent, 6°), wood (grain, 6°), brass (polished, 7°); flat bottom on the desk, USB-C port; low-profile cases for Choc |
 
-Profile heights come from published comparison charts and vary ±0.3 mm between manufacturers. Send exact references
-(e.g. a specific brand's CAD numbers) to have them matched.
+Profile heights come from published comparison charts and vary ±0.3 mm between manufacturers.
 
-## Phases
-1. **Keyboard kit** (proof of concept done, see `art/previews/`): all 6 layouts, 5 profiles, switch types
-   (linear/tactile/clicky/silent looks), case per material (aluminum, plastic, polycarbonate, acrylic sandwich, wood, brass),
-   plates, foams, PCB (hot-swap sockets, diodes, MCU, USB-C), stabilizers, then in-game integration.
-2. **Characters**: one designed base body (quad topology, subdivision), rigged, with face shape keys (smile, frown,
-   angry, talk, blink), clothing and hair variants, animation clips (idle, walk, talk, wave, happy, angry, typing).
-   **A sample will be shown for approval before producing the variants.**
-3. **Shop**: architecture (moldings, window frames, door), furniture (shelving, counter, workbench with pegboard,
-   display tables), props (tools, lube jars, switch bags, product boxes with generated joke-brand art, neon sign as
-   real tube geometry), **baked lighting**.
-4. **Minigame props**: lube station (brush, pot), switch opener, stab wire close-ups, soldering station, screwdriver,
-   tape roll, keycap puller.
-5. **Integration & performance**: LODs, instancing, WebP textures, mobile checks.
+## Regenerating
+```bash
+~/.venvs/bpy/bin/python art/blender/export_switches.py        # switch glb files
+~/.venvs/bpy/bin/python art/blender/workshop.py bench         # bench.glb
+~/.venvs/bpy/bin/python art/blender/workshop.py pano          # panorama HDR (~15 min on 4 CPU cores)
+~/.venvs/bpy/bin/python art/blender/pano_post.py              # background jpg + small HDR
+node tests/e2e/make_env.cjs                                   # workshop.env (needs `npm run dev`)
+~/.venvs/bpy/bin/python art/blender/poc_switches.py           # Cycles render of the switch models
+```
+
+## Removed in v0.3
+The procedural humans, the walkable store and the avatar editor (the game no longer has a shop floor).

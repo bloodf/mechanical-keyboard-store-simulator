@@ -6,10 +6,12 @@ import { generateJob } from "../../src/build/jobs";
 import { computeProfile, SOUND_COMBOS, soundMatch, partsCost } from "../../src/build/profile";
 import { evaluateBuild } from "../../src/build/scoring";
 import { newSession, applySolder, stepsFor } from "../../src/build/session";
-import type { BuildSession, JobRequest } from "../../src/build/types";
+import type { BuildSession, JobRequest, Order } from "../../src/build/types";
+
+const asOrder = (j: JobRequest): Order => ({ ...j, kind: "build", received: 1, expires: 2, due: 4 });
 
 function randomBuild(job: JobRequest, cat: Catalog, rng: Rng, builds: number): BuildSession {
-  const b = newSession(job);
+  const b = newSession(asOrder(job));
   const ok = <T extends { requires?: { builds?: number } }>(xs: T[]) => xs.filter((x) => isUnlocked(x.requires, builds));
   b.layout = "65";
   const cm = rng.pick(ok(CASE_MATERIALS));
@@ -90,17 +92,17 @@ describe("build flow & scoring", () => {
   const cat = generateCatalog("FLOW");
   const job = generateJob("FLOW", 1, cat, 0);
   it("solder step only appears for solder PCBs", () => {
-    const b = newSession(job);
+    const b = newSession(asOrder(job));
     b.pcb = "hotswap";
     expect(stepsFor(b)).not.toContain("solder");
     b.pcb = "solder";
     expect(stepsFor(b)).toContain("solder");
   });
   it("missed solder beats create faulty keys, deterministically", () => {
-    const a = newSession(job);
+    const a = newSession(asOrder(job));
     a.layout = "65";
     applySolder(a, 0.5, [0, 3, 7], 16);
-    const b = newSession(job);
+    const b = newSession(asOrder(job));
     b.layout = "65";
     applySolder(b, 0.5, [0, 3, 7], 16);
     expect(a.faults.length).toBe(3);

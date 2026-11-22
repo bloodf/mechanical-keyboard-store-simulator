@@ -68,7 +68,7 @@ export function createWorkshopHud(ui: Ui, o: HudOpts): WorkshopHud {
     const right = stack({ horizontal: true, h: 46, spacing: S.sm, x: -S.md, y: 7, ha: H_RIGHT });
     right.addControl(chip(formatMoney(s.money), { bg: C.white, color: s.money >= 0 ? C.good : C.bad, size: small ? T.body : T.h3, h: 38, name: "hud-money" }));
     right.addControl(chip(`★ ${formatNumber(s.reputation / 100, 1)}`, { bg: C.white, color: C.gold, size: small ? T.body : T.h3, h: 38, name: "hud-rep" }));
-    if (s.flags.knownCheater) right.addControl(chip("🤡", { bg: C.white, size: T.h3, h: 38 }));
+    if (s.flags.knownCheater) right.addControl(chip("🤡", { bg: "#ffe1e6", color: C.badDark, size: small ? T.h3 : T.small, h: 38, name: "hud-cheater" }));
     right.addControl(button(small ? "🌙" : `🌙 ${t("ws.nav.close")}`, { w: small ? 48 : 170, h: 44, size: "sm", variant: s.minute >= 17 * 60 ? "primary" : "secondary", testId: "nav-closeday", onClick: o.onCloseDay }));
     right.addControl(button("☰", { w: 48, h: 44, size: "sm", variant: "dark", testId: "nav-menu", onClick: o.onMenu }));
     bar.addControl(right);

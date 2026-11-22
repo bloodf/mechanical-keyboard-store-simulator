@@ -45,7 +45,14 @@ async function newGamePage(browser, { mobile = false, context = null } = {}) {
     },
     async click(name) {
       await api.waitFor(name);
-      const r = await api.find(name);
+      // wait until the control stops moving (layout settles after it appears)
+      let r = await api.find(name);
+      for (let i = 0; i < 10; i++) {
+        await page.waitForTimeout(150);
+        const r2 = await api.find(name);
+        if (r2 && r && Math.abs(r2.x - r.x) < 1 && Math.abs(r2.y - r.y) < 1) break;
+        r = r2 ?? r;
+      }
       if (mobile) await page.touchscreen.tap(r.x, r.y);
       else await page.mouse.click(r.x, r.y);
       await page.waitForTimeout(350);

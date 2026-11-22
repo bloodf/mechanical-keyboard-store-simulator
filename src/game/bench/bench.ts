@@ -257,9 +257,7 @@ export class BenchMode {
     drawer.addControl(body);
     // footer
     const done = stepDone(b, b.step);
-    const next = nextStep(b);
     const prev = prevStep(b);
-    void next;
     const foot = stack({ horizontal: true, h: 52, spacing: S.sm, x: -pad, y: -S.md, ha: H_RIGHT, va: V_BOTTOM });
     if (prev && canGoBack(b)) foot.addControl(button(`← ${t("bench.back")}`, { w: portrait ? 100 : 140, testId: "btn-back", onClick: () => (play("ui.back"), this.openStep(prev)) }));
     const mins = stepMinutes(b, b.step);
@@ -354,11 +352,13 @@ export class BenchMode {
     const acc = this.o.state.accepted;
     const w = Math.min(ui.W - 2 * S.md, 980);
     const cardH = 168;
-    const h = acc.length ? Math.min(ui.H - this.o.hudHeight() - 40, 120 + Math.ceil(acc.length / 2) * (cardH + S.md)) : 200;
+    const head = ui.portrait ? 160 : 100;
+    const h = acc.length ? Math.min(ui.H - this.o.hudHeight() - 40, head + 20 + (ui.portrait ? acc.length : Math.ceil(acc.length / 2)) * (cardH + S.md)) : ui.portrait ? 220 : 200;
     const p = panel({ w, h, y: -S.lg, ha: H_CENTER, va: V_BOTTOM, radius: R.xl, name: "bench-idle" });
     p.addControl(label(`🛠 ${t("ws.benchFree")}`, { size: T.h2, weight: 700, x: S.xl, y: S.lg, h: 34 }));
-    p.addControl(label(acc.length ? t("ws.benchFreeBody") : t("ws.benchEmptyBody"), { size: T.body, color: C.inkSoft, x: S.xl, y: S.lg + 36, h: 24, w: w - 2 * S.xl - 200 }));
-    p.addControl(button(`📋 ${t("ws.openOrders")}`, { w: 190, h: 46, size: "sm", x: -S.xl, y: S.lg, ha: H_RIGHT, testId: "bench-orders", onClick: () => this.o.openOrders() }));
+    const narrow = ui.portrait;
+    p.addControl(label(acc.length ? t("ws.benchFreeBody") : t("ws.benchEmptyBody"), { size: T.body, color: C.inkSoft, x: S.xl, y: S.lg + 36, h: narrow ? 48 : 24, w: w - 2 * S.xl - (narrow ? 0 : 200), wrap: narrow }));
+    p.addControl(button(`📋 ${t("ws.openOrders")}`, { w: 190, h: 46, size: "sm", x: narrow ? S.xl : -S.xl, y: narrow ? S.lg + 92 : S.lg, ha: narrow ? undefined : H_RIGHT, testId: "bench-orders", onClick: () => this.o.openOrders() }));
     const cw = ui.portrait ? w - 2 * S.lg : (w - 2 * S.xl - S.md) / 2;
     acc.forEach((o, i) => {
       const c = orderCard(o, {
@@ -370,7 +370,7 @@ export class BenchMode {
         actions: [{ text: `▶ ${t("ws.start")}`, variant: "primary", testId: `start-${o.id}`, onClick: () => this.start(o.id) }],
       });
       c.left = `${S.xl + (ui.portrait ? 0 : (i % 2) * (cw + S.md))}px`;
-      c.top = `${100 + (ui.portrait ? i : Math.floor(i / 2)) * (cardH + S.md)}px`;
+      c.top = `${head + (ui.portrait ? i : Math.floor(i / 2)) * (cardH + S.md)}px`;
       p.addControl(c);
     });
     root.addControl(p);

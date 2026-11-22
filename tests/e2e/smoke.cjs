@@ -1,4 +1,4 @@
-// Smoke test (desktop + mobile): title, settings, character creation (name + store name),
+// Smoke test (desktop + mobile): title, settings, workshop setup (your name + workshop name),
 // encrypted save, reload/continue, one-tab rule, tamper → cheater screen → 🤡 badge.
 // Needs `npm run dev` running.
 const { ok, launch, newGamePage } = require("./helpers.cjs");
@@ -8,7 +8,7 @@ async function run(name, mobile) {
   const browser = await launch();
   const g = await newGamePage(browser, { mobile });
   const { page } = g;
-  if (mobile) page.on("dialog", (d) => d.accept(d.message().toLowerCase().includes("store") ? "Mobile Thocks" : "Mina"));
+  if (mobile) page.on("dialog", (d) => d.accept(d.message().toLowerCase().includes("workshop") ? "Mobile Thocks" : "Mina"));
   await g.open();
   await g.waitFor("btn-new");
   ok(!(await g.find("btn-continue")), "fresh browser has no Continue button");
@@ -16,17 +16,17 @@ async function run(name, mobile) {
 
   // Settings: change a volume (click on the slider track) — remembered in localStorage
   await g.click("btn-settings");
-  await g.waitFor("vol-voice");
-  const s = await g.find("vol-voice");
+  await g.waitFor("vol-world");
+  const s = await g.find("vol-world");
   if (mobile) await page.touchscreen.tap(s.x - s.w * 0.3, s.y);
   else await page.mouse.click(s.x - s.w * 0.3, s.y);
   await page.waitForTimeout(500);
   await g.shot(`${name}-2-settings`);
   await g.click("settings-close");
-  const vol = await page.evaluate(() => JSON.parse(localStorage.getItem("mkss.settings.audio") || "{}").voice);
+  const vol = await page.evaluate(() => JSON.parse(localStorage.getItem("mkss.settings.audio") || "{}").world);
   ok(typeof vol === "number" && vol < 0.6, `volume setting saved (${vol})`);
 
-  // New game → character creation
+  // New game → name yourself and the workshop
   await g.click("btn-new");
   await g.waitFor("profile-done");
   if (!mobile) {
@@ -40,21 +40,18 @@ async function run(name, mobile) {
     await g.click("input-store");
     await page.waitForTimeout(800);
   }
-  await g.click("ptab-hair");
-  await g.click("st-hair-next");
-  await g.click("sw-hair-9");
-  await page.waitForTimeout(1500);
-  await g.shot(`${name}-3-creator`);
+  await page.waitForTimeout(1000);
+  await g.shot(`${name}-3-setup`);
   await g.click("profile-done");
-  await g.waitFor("hud-plate");
+  await g.waitFor("hud-bar");
   const st = await g.state();
   const wantStore = mobile ? "Mobile Thocks" : "Desk Thocks";
   ok(st.profile.created && st.profile.name === "Mina" && st.profile.storeName === wantStore, `profile saved (${st.profile.name} @ ${st.profile.storeName})`);
-  ok(st.profile.avatar.hairColor.toLowerCase() === "#ff7eb6", "avatar edits saved");
+  ok(st.offers.length === 2 && Object.keys(st.inventory).length > 5, "first orders and the starter stock are there");
   const raw = await page.evaluate(() => localStorage.getItem("mkss.save.a") || localStorage.getItem("mkss.save.b"));
   ok(raw && raw.startsWith("MKSS1.") && !raw.includes("Mina"), "save is encrypted");
   await page.waitForTimeout(2500);
-  await g.shot(`${name}-4-play`);
+  await g.shot(`${name}-4-workshop`);
 
   // dev: +$100, then reload → Continue keeps it
   await g.click("dev-tools");
@@ -63,7 +60,7 @@ async function run(name, mobile) {
   await page.waitForFunction(() => window.__mkss, null, { timeout: 180000 });
   await g.waitFor("btn-continue");
   await g.click("btn-continue");
-  await g.waitFor("hud-plate");
+  await g.waitFor("hud-bar");
   ok((await g.state()).money === 60000, "money persisted across reload ($600)");
 
   // Second tab takes over; the first pauses without a false cheating alarm
@@ -97,9 +94,9 @@ async function run(name, mobile) {
   ok(true, "reloading does not escape the cheater screen");
   await g.waitFor("btn-start-over", 60000);
   await g.click("btn-start-over");
-  await g.waitFor("profile-done");
+  await g.waitFor("profile-done", 240000); // builds the whole workshop scene again (slow in software GL)
   await g.click("profile-done");
-  await g.waitFor("hud-badge");
+  await g.waitFor("hud-cheater");
   const after = await g.state();
   ok(after.money === 50000 && after.flags.knownCheater, "progress wiped and the 🤡 Known Cheater badge is shown");
   await page.waitForTimeout(1500);
