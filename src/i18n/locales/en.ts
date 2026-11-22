@@ -624,7 +624,7 @@ const en = {
   "membrane.reply.2.0": "Okay. I've put it on a little pillow. It deserves a rest.",
   "membrane.reply.2.1": "Rude. Correct, but rude. See you when I'm ready for a real one.",
   "membrane.reply.2.2": "My keyboard heard that. It's sulking now.",
-  "review.ecstatic.0": "★★★★★ Absolute dream. Every keystroke makes me happy. Thank you!",
+  "review.ecstatic.0": "Absolute dream. Every keystroke makes me happy. Thank you!",
   "review.ecstatic.1": "Perfect in every way. I've typed three novels since it arrived. Yesterday.",
   "review.ecstatic.2": "This is the best keyboard I've ever owned. Telling all my friends!",
   "review.happy.0": "Really nice build, thank you! Sounds great.",

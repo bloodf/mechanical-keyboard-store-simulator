@@ -133,3 +133,4 @@ See README.md (Layout). Framework-free rules live in `src/build` and `src/core` 
 | Product photos | render supplier thumbnails from the real 3D parts instead of 2D icons |
 | Workshop upgrades | lube station, switch opener, second bench, better lamp (visible on the bench) |
 | Events | group-buy delays, damaged deliveries, a viral trend for pink switches |
+| Download size | the JS bundle is 7 MB (1.6 MB gzipped) because Babylon is imported whole; deep imports would cut it |

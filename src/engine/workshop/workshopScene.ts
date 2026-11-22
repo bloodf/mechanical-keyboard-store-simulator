@@ -106,6 +106,8 @@ export class WorkshopScene implements GameScene {
   private busyT = 0;
   private attract = false;
   private t = 0;
+  /** Player's own look-around on top of the framed view (right-drag / wheel); reset when the view changes. */
+  private user = { alpha: 0, beta: 0, zoom: 1 };
   private matTex: DynamicTexture;
   private dome: Mesh;
   /** Resolves when the environment and the bench are loaded. */
@@ -191,6 +193,7 @@ export class WorkshopScene implements GameScene {
     this.setupPipeline(app.quality);
     app.onQualityChange.push((q) => this.setupPipeline(q));
     this.ui = new Ui(scene);
+    this.setupLookAround(app.canvas);
 
     this.ready = loadGlb(`${ASSETS}/models/bench.glb`)
       .then((file) => {
@@ -273,6 +276,7 @@ export class WorkshopScene implements GameScene {
   }
 
   setBenchView(v: BenchView | BenchFocus, boardSize?: { w: number; d: number }) {
+    if (v !== this.benchView) this.user = { alpha: 0, beta: 0, zoom: 1 };
     this.benchView = v;
     if (boardSize) this.benchSize = boardSize;
     this.busyT = 1.5;
@@ -313,6 +317,36 @@ export class WorkshopScene implements GameScene {
     this.busyT = 2;
   }
 
+  /** Right-drag (or two-finger drag) to look around the keyboard, wheel to zoom. Left button stays with the minigames. */
+  private setupLookAround(canvas: HTMLCanvasElement) {
+    let drag: { x: number; y: number } | null = null;
+    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+    canvas.addEventListener("pointerdown", (e) => {
+      if (this.attract || (e.button !== 2 && e.button !== 1)) return;
+      drag = { x: e.clientX, y: e.clientY };
+    });
+    window.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.x;
+      const dy = e.clientY - drag.y;
+      drag = { x: e.clientX, y: e.clientY };
+      this.user.alpha = Math.max(-0.7, Math.min(0.7, this.user.alpha - dx * 0.004));
+      this.user.beta = Math.max(-0.5, Math.min(0.45, this.user.beta - dy * 0.004));
+      this.busyT = 0.5;
+    });
+    window.addEventListener("pointerup", () => (drag = null));
+    canvas.addEventListener(
+      "wheel",
+      (e) => {
+        if (this.attract || this.ui.adt.getControlByName("drawer") === null) return;
+        e.preventDefault();
+        this.user.zoom = Math.max(0.55, Math.min(1.6, this.user.zoom * Math.exp(e.deltaY * 0.001)));
+        this.busyT = 0.5;
+      },
+      { passive: false },
+    );
+  }
+
   private updateCameraWants() {
     const w = this.want;
     if (this.attract) {
@@ -337,6 +371,9 @@ export class WorkshopScene implements GameScene {
       w.radius = dist;
       w.target = this.offsetTarget(anchor.add(new Vector3(0, 0.015, 0)), dist);
     }
+    w.alpha += this.user.alpha;
+    w.beta = Math.max(0.12, Math.min(1.35, w.beta + this.user.beta));
+    w.radius *= this.user.zoom;
   }
 
   private snapCamera() {

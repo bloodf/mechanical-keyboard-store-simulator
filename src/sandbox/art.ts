@@ -1,5 +1,5 @@
 /** Dev-only art sandbox: ?view=caps | switches | board2 — PBR previews of the generated keyboard parts. */
-import { ArcRotateCamera, Color3, Color4, DirectionalLight, Engine, HemisphericLight, Mesh, MeshBuilder, PBRMaterial, Scene, ShadowGenerator, Vector3, VertexData } from "@babylonjs/core";
+import { ArcRotateCamera, Color3, Color4, CubeTexture, DirectionalLight, Engine, ImageProcessingConfiguration, Mesh, MeshBuilder, PBRMaterial, Scene, ShadowGenerator, Vector3, VertexData } from "@babylonjs/core";
 import { KEYCAP_PROFILES, type ProfileRow } from "../data/profiles";
 import { getCatalog } from "../data/catalog";
 import { CASE_MATERIALS, PCBS, PLATES, STABS } from "../data/parts";
@@ -12,12 +12,12 @@ export async function run(canvas: HTMLCanvasElement, q: URLSearchParams) {
   const engine = new Engine(canvas, true, { stencil: true });
   const scene = new Scene(engine);
   scene.clearColor = new Color4(0.16, 0.17, 0.19, 1);
-  const hemi = new HemisphericLight("h", new Vector3(0.2, 1, -0.3), scene);
-  hemi.intensity = 0.8;
-  hemi.groundColor = new Color3(0.25, 0.22, 0.2);
+  scene.environmentTexture = CubeTexture.CreateFromPrefilteredData(`${import.meta.env.BASE_URL}assets/env/workshop.env`, scene);
+  scene.imageProcessingConfiguration.toneMappingEnabled = true;
+  scene.imageProcessingConfiguration.toneMappingType = ImageProcessingConfiguration.TONEMAPPING_KHR_PBR_NEUTRAL;
   const sun = new DirectionalLight("s", new Vector3(-0.4, -1, 0.6), scene);
   sun.position = new Vector3(200, 400, -300);
-  sun.intensity = 2.2;
+  sun.intensity = 1.4;
   const sg = new ShadowGenerator(2048, sun);
   sg.usePercentageCloserFiltering = true;
   const cam = new ArcRotateCamera("cam", Number(q.get("a") ?? Math.PI / 2 + 0.5), Number(q.get("b") ?? 1.0), Number(q.get("r") ?? 260), Vector3.Zero(), scene);
@@ -26,7 +26,7 @@ export async function run(canvas: HTMLCanvasElement, q: URLSearchParams) {
   cam.attachControl(canvas, true);
   const ground = MeshBuilder.CreateGround("g", { width: 2000, height: 2000 }, scene);
   const gm = new PBRMaterial("gm", scene);
-  gm.albedoColor = Color3.FromHexString("#3a4350");
+  gm.albedoColor = Color3.FromHexString("#3a4350").toLinearSpace();
   gm.roughness = 0.8;
   gm.metallic = 0;
   ground.material = gm;
@@ -36,8 +36,8 @@ export async function run(canvas: HTMLCanvasElement, q: URLSearchParams) {
     const colors = ["#e9e4d8", "#2f3b4c", "#c8553d", "#6a8d73", "#d9b44a", "#8e7dbe", "#4f6d7a", "#ffb3c1"];
     KEYCAP_PROFILES.forEach((p, pi) => {
       const mat = new PBRMaterial(`m${p}`, scene);
-      mat.albedoColor = Color3.FromHexString(colors[pi]);
-      mat.roughness = 0.6;
+      mat.albedoColor = Color3.FromHexString(colors[pi]).toLinearSpace();
+      mat.roughness = 0.62;
       mat.metallic = 0;
       const z = (pi - KEYCAP_PROFILES.length / 2) * PITCH * 1.25;
       const items: { w: number; row: ProfileRow }[] = [{ w: 1, row: 1 }, { w: 1, row: 2 }, { w: 1, row: 3 }, { w: 1, row: 4 }, { w: 2.25, row: 3 }, { w: 6.25, row: 4 }];
@@ -81,6 +81,7 @@ export async function run(canvas: HTMLCanvasElement, q: URLSearchParams) {
     b.base.scaling.setAll(1000); // sandbox works in mm
     cam.target = new Vector3(0, 10, 0);
   }
+  await new Promise<void>((r) => scene.executeWhenReady(() => r()));
   (window as unknown as { ready: boolean }).ready = true;
   if (q.get("still")) {
     // software GL is slow: render a few frames, then stop (screenshots)

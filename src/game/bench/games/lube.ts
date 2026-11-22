@@ -45,7 +45,8 @@ export class LubeGame {
     this.zone = LUBE_ZONES[sw.type];
     const anchor = ctx.store.layout.benchAnchor.getAbsolutePosition();
     this.root = new TransformNode("lubeGame", scene);
-    this.root.position = anchor.add(new Vector3(0.03, 0.005, 0.02));
+    // in front of the keyboard, on the mat (the typist is at +Z)
+    this.root.position = anchor.add(new Vector3(0.02, 0.002, 0.15));
     // The real switch model, magnified 4×, opened up on the bench
     const fam = sw.family;
     const models = switchParts(fam);
@@ -125,7 +126,7 @@ export class LubeGame {
     this.layoutParts(1);
     this.setFill(0);
     play("bench.switchOpen");
-    setTimeout(() => ctx.view({ target: this.root.position.add(new Vector3(-0.02, 0.045, 0)), w: 0.22, d: 0.13, beta: 1.1 }), 50);
+    setTimeout(() => ctx.view({ target: this.root.position.add(new Vector3(-0.02, 0.05, 0)), w: 0.2, d: 0.15, beta: 1.05 }), 50);
     this.updateCounter();
   }
 
@@ -135,7 +136,7 @@ export class LubeGame {
 
   /** spread 1 = opened (exploded view), 0 = closed. Offsets in real mm. */
   private layoutParts(spread: number) {
-    const off: Record<string, number> = { spring: 5, stem: 12, jacket: 12, box: 22, top: 22 };
+    const off: Record<string, number> = { spring: 4, stem: 9, jacket: 9, box: 16, top: 16 };
     for (const [k, m] of Object.entries(this.parts)) m.position.y = (off[k] ?? 0) * spread;
   }
 

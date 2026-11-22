@@ -29,6 +29,7 @@ npm run preview    # serve the production build on :4173
   sound check — then **pack & ship**. The client pays on delivery; their review arrives by mail.
 - Time only passes when you work (each step takes workshop minutes). The workshop closes at 18:00; new orders and
   standard deliveries arrive in the morning. Deliver late and clients pay less (and say so).
+- At the bench, **right-drag** (or middle-drag) looks around the keyboard and the **mouse wheel** zooms.
 - In the key test and sound check you can type on your **real keyboard**.
 
 ## Test
