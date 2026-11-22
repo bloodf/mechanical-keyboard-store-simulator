@@ -270,11 +270,6 @@ export function chip(text: string, o: Box & { bg?: string; color?: string; size?
   (r as Rectangle & { textBlock?: TextBlock }).textBlock = t;
   return r;
 }
-export function chipText(c: Rectangle, text: string) {
-  const t = (c as Rectangle & { textBlock?: TextBlock }).textBlock;
-  if (t) t.text = text;
-}
-
 /** Horizontal progress/score bar. */
 export function bar(value: number, o: Box & { color?: string; bg?: string; thickness?: number } = {}): Rectangle {
   const h = o.thickness ?? 10;
@@ -396,25 +391,6 @@ export function slider(value: number, o: Box & { testId?: string; onChange: (v: 
   return s;
 }
 
-/** ◀ value ▶ picker (avatar editor etc.). */
-export function stepper(values: string[], index: number, o: Box & { testId: string; onChange: (i: number) => void; format?: (i: number) => string }): Container {
-  const c = group({ w: o.w ?? 260, h: o.h ?? 48, x: o.x, y: o.y, ha: o.ha, va: o.va, name: o.testId });
-  let i = index;
-  const text = label((o.format ?? ((k) => values[k]))(i), { size: T.body, weight: 700, align: H_CENTER, w: "100%", h: "100%" });
-  const set = (d: number) => {
-    i = (i + d + values.length) % values.length;
-    text.text = (o.format ?? ((k) => values[k]))(i);
-    o.onChange(i);
-  };
-  const bg = panel({ w: "100%", h: "100%", bg: C.white, radius: R.md, shadow: false, border: C.line, thickness: 2 });
-  c.addControl(bg);
-  c.addControl(text);
-  c.addControl(button("◀", { w: 44, h: 40, size: "sm", x: 4, va: V_CENTER, testId: `${o.testId}-prev`, onClick: () => set(-1) }));
-  c.addControl(button("▶", { w: 44, h: 40, size: "sm", x: -4, ha: H_RIGHT, va: V_CENTER, testId: `${o.testId}-next`, onClick: () => set(1) }));
-  return c;
-}
-
-/** A round color swatch button. */
 export function swatch(hex: string, selected: boolean, o: Box & { testId?: string; size?: number; onClick: () => void }): Ellipse {
   const size = o.size ?? 36;
   const e = new Ellipse(o.testId ?? nextName("swatch"));

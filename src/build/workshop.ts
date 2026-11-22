@@ -11,9 +11,10 @@ import type { Catalog } from "../data/catalog";
 import { getLayout } from "../data/layouts";
 import { convertMembrane, generateOrder } from "./jobs";
 import { newSession } from "./session";
-import { EXPRESS_MINUTES, give, packPrice, SHIPPING_FEE, SKU_LUBE, parseSku, starterKit, take, unitPrice, type Shipping } from "./stock";
+import { EXPRESS_MINUTES, give, packPrice, SHIPPING_FEE, SKU_LUBE, parseSku, starterKit, stockValue, take, unitPrice, type Shipping } from "./stock";
 import type { BuildSession, Order, StepId } from "./types";
 import type { BuildResult } from "./scoring";
+import { hasTool } from "./tools";
 
 export function formatClock(minute: number): string {
   const h = Math.floor(minute / 60) % 24;
@@ -22,7 +23,7 @@ export function formatClock(minute: number): string {
 }
 
 /** Workshop minutes a finished step takes. */
-export function stepMinutes(b: BuildSession, step: StepId): number {
+export function stepMinutes(b: BuildSession, step: StepId, owner: Pick<GameState, "unlocks"> = { unlocks: [] }): number {
   const keys = b.layout ? getLayout(b.layout).keys.length : 60;
   switch (step) {
     case "case":
@@ -38,21 +39,21 @@ export function stepMinutes(b: BuildSession, step: StepId): number {
     case "switches":
       return 5;
     case "lube":
-      return b.lube && !b.lube.skipped ? Math.round(keys * 0.5) : 0;
+      return b.lube && !b.lube.skipped ? Math.round(keys * (hasTool(owner, "lubeStation") ? 0.35 : 0.5)) : 0;
     case "install":
       return Math.round(keys * 0.25);
     case "solder":
-      return Math.round(keys * 0.6);
+      return Math.round(keys * (hasTool(owner, "solderStation") ? 0.42 : 0.6));
     case "screws":
       return 10;
     case "keycaps":
       return 15;
     case "test":
-      return 10;
+      return hasTool(owner, "keyTester") ? 4 : 10;
     case "sound":
       return 5;
     case "deliver":
-      return 15;
+      return hasTool(owner, "packingStation") ? 5 : 15;
   }
 }
 
@@ -67,7 +68,16 @@ export interface DayReport {
   deliveries: number;
   expired: number;
   cancelled: number;
+  rent: number; // paid this morning
+  newMail: number; // arrived overnight
+  rescue: number; // emergency money from Grandma Thock (when broke)
 }
+
+/** Daily workshop rent (charged each morning, never below $0). */
+export const RENT = 25_00;
+/** When you're broke with nothing to build, Grandma helps out (at most once a week). */
+export const RESCUE = 200_00;
+const RESCUE_EVERY = 7;
 
 const mailId = (s: GameState) => `m${s.ordersIssued}.${s.mail.length}.${nowAbs(s)}.${Math.floor(Math.random() * 1e6)}`;
 
@@ -106,15 +116,27 @@ function newOffersCount(s: GameState): number {
 
 /** Close the workshop for the day and open it the next morning. */
 export function nextDay(s: GameState, cat: Catalog): DayReport {
-  const report: DayReport = { day: s.day, income: s.today.income, expenses: s.today.expenses, shipped: s.today.shipped, newOffers: 0, deliveries: 0, expired: 0, cancelled: 0 };
+  const report: DayReport = { day: s.day, income: s.today.income, expenses: s.today.expenses, shipped: s.today.shipped, newOffers: 0, deliveries: 0, expired: 0, cancelled: 0, rent: 0, newMail: 0, rescue: 0 };
+  const before = nowAbs(s);
   s.day += 1;
   s.minute = DAY_START;
   s.today = { income: 0, expenses: 0, shipped: 0 };
   report.deliveries = receiveShipments(s).length;
   // unanswered offers expire
-  const before = s.offers.length;
+  const offersBefore = s.offers.length;
   s.offers = s.offers.filter((o) => o.expires >= s.day);
-  report.expired = before - s.offers.length;
+  report.expired = offersBefore - s.offers.length;
+  // rent (the landlord takes what's there, never more)
+  report.rent = Math.min(RENT, Math.max(0, s.money));
+  s.money -= report.rent;
+  s.today.expenses += report.rent;
+  // broke, nothing on the bench or on the shelves: Grandma Thock sends money
+  if (s.money < 50_00 && !s.activeBuild && stockValue(s.inventory, cat) < 100_00 && !s.shipments.length && s.day - (s.rescueDay ?? -99) >= RESCUE_EVERY) {
+    s.money += RESCUE;
+    s.rescueDay = s.day;
+    report.rescue = RESCUE;
+    addMail(s, { at: nowAbs(s), kind: "gift", from: "@mail.from.grandma", key: "mail.rescue", params: { money: RESCUE } });
+  }
   // accepted orders far past their deadline are cancelled by the client
   for (const o of [...s.accepted]) {
     if (s.day > o.due + 2) {
@@ -128,6 +150,8 @@ export function nextDay(s: GameState, cat: Catalog): DayReport {
   const n = Math.min(newOffersCount(s), OFFERS_MAX - s.offers.length);
   for (let i = 0; i < n; i++) s.offers.push(generateOrder(s.seed, s.ordersIssued++, cat, { day: s.day, builds: s.stats.keyboardsBuilt }));
   report.newOffers = Math.max(0, n);
+  const now = nowAbs(s);
+  report.newMail = s.mail.filter((m) => m.at > before && m.at <= now).length;
   return report;
 }
 
@@ -284,7 +308,7 @@ export function shipBuild(s: GameState, r: BuildResult): ShipOutcome {
   const stars = Math.max(1, r.stars - (late >= 3 ? 2 : late >= 1 ? 1 : 0));
   const pay = Math.round((r.pay * lateFactor) / 100) * 100;
   const tip = late ? 0 : r.tip;
-  const repDelta = [0, -12, -6, 1, 6, 12][stars] - (late ? 3 : 0);
+  const repDelta = [0, -12, -6, 1, 6, 12][stars] - (late ? 3 : 0) + (hasTool(s, "packingStation") && stars >= 3 ? 2 : 0);
   s.money += pay + tip;
   s.today.income += pay + tip;
   s.today.shipped++;

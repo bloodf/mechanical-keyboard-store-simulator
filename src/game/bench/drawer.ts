@@ -59,7 +59,6 @@ export function tileRow(tiles: TileSpec[], area: DrawerArea, pager: Pager, reren
 }
 
 function tileControl(t0: TileSpec, w: number, h: number, prefix = "tile"): Control {
-  const locked = t0.lockedAt !== null && t0.lockedAt !== undefined;
   const r = new Rectangle(`${prefix}-${t0.id}`);
   r.width = `${w}px`;
   r.height = `${h}px`;
@@ -73,9 +72,8 @@ function tileControl(t0: TileSpec, w: number, h: number, prefix = "tile"): Contr
   r.shadowBlur = t0.selected ? 14 : 8;
   r.shadowOffsetY = 3;
   r.isPointerBlocker = true;
-  r.hoverCursor = locked ? "not-allowed" : "pointer";
-  if (locked) r.alpha = 0.55;
-  else if (t0.dim) r.alpha = 0.7;
+  r.hoverCursor = "pointer";
+  if (t0.dim) r.alpha = 0.7;
   const iconH = Math.round(h * 0.34);
   const iconBg = new Rectangle();
   iconBg.thickness = 0;
@@ -99,8 +97,8 @@ function tileControl(t0: TileSpec, w: number, h: number, prefix = "tile"): Contr
   const subH = (words.length ? fxY : priceY) - y - 2;
   if (t0.sub && subH > 12) r.addControl(label(t0.sub, { size: T.tiny, weight: 500, color: C.inkSoft, x: 10, y, w: w - 20, h: subH, ellipsis: true, valign: 0 }));
   if (words.length) r.addControl(label(words.join(" · "), { size: T.tiny, weight: 700, color: C.blue, x: 10, y: fxY, w: w - 20, h: 16 }));
-  const price = locked ? t("bench.locked", { count: t0.lockedAt! }) : (t0.priceText ?? (t0.price ? formatMoney(t0.price) : t("bench.free")));
-  r.addControl(label(price, { size: T.small, weight: 700, color: locked || t0.dim ? C.inkSoft : C.good, x: 10, y: priceY, w: w - 20, h: 20 }));
+  const price = t0.priceText ?? (t0.price ? formatMoney(t0.price) : t("bench.free"));
+  r.addControl(label(price, { size: T.small, weight: 700, color: t0.dim ? C.inkSoft : C.good, x: 10, y: priceY, w: w - 20, h: 20 }));
   if (t0.selected) {
     const check = new Rectangle();
     check.width = check.height = "26px";
@@ -114,34 +112,13 @@ function tileControl(t0: TileSpec, w: number, h: number, prefix = "tile"): Contr
     check.addControl(label("✓", { size: T.body, weight: 700, color: C.white, align: H_CENTER, h: 26 }));
     r.addControl(check);
   }
-  if (t0.badge) {
-    const b = label(t0.badge, { size: T.tiny, weight: 700, color: C.white, align: H_CENTER, w: 60, h: 20, x: 8, y: 10 });
-    const bg = new Rectangle();
-    bg.width = "64px";
-    bg.height = "20px";
-    bg.cornerRadius = 10;
-    bg.thickness = 0;
-    bg.background = C.blue;
-    bg.horizontalAlignment = 0;
-    bg.verticalAlignment = 0;
-    bg.left = "8px";
-    bg.top = "10px";
-    bg.addControl(b);
-    r.addControl(bg);
-  }
   r.onPointerEnterObservable.add(() => {
-    if (!locked && !t0.selected) r.color = "#f3b58f";
-    if (!locked) play("ui.hover");
+    if (!t0.selected) r.color = "#f3b58f";
+    play("ui.hover");
   });
   r.onPointerOutObservable.add(() => (r.color = t0.selected ? C.accent : C.line));
-  r.onPointerDownObservable.add(() => !locked && (r.scaleX = r.scaleY = 0.97));
+  r.onPointerDownObservable.add(() => (r.scaleX = r.scaleY = 0.97));
   r.onPointerUpObservable.add(() => (r.scaleX = r.scaleY = 1));
-  r.onPointerClickObservable.add(() => {
-    if (locked) {
-      play("ui.error");
-      return;
-    }
-    t0.onClick();
-  });
+  r.onPointerClickObservable.add(() => t0.onClick());
   return r;
 }

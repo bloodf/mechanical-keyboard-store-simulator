@@ -37,11 +37,12 @@ export class WireGame {
     const scene = ctx.store.scene;
     const anchor = ctx.store.layout.benchAnchor.getAbsolutePosition();
     this.root = new TransformNode("wireGame", scene);
-    this.root.position = anchor.add(new Vector3(0, 0.03, 0.0));
+    // a magnified stabilizer on the mat, in front of the keyboard (the typist is at +Z)
+    this.root.position = anchor.add(new Vector3(0, 0.008, 0.16));
     this.dry = mat(scene, "#b9bec6", { spec: 0.6 });
     this.wet = mat(scene, "#f2d06b", { spec: 1, emissive: "#3a2c00" });
     // U-shaped wire: long bar with legs bending back into the housings
-    const half = 0.12;
+    const half = 0.09;
     for (let i = 0; i <= SEGMENTS; i++) {
       const u = i / SEGMENTS;
       let p: Vector3;
@@ -76,7 +77,7 @@ export class WireGame {
     tip.position.y = 0.006;
     this.brush.rotation.z = 0.35;
     this.brush.setEnabled(false);
-    setTimeout(() => ctx.view({ target: this.root.position.clone(), w: 0.3, d: 0.12, beta: 0.55 }), 50);
+    setTimeout(() => ctx.view({ target: this.root.position.add(new Vector3(0, 0, -0.02)), w: 0.24, d: 0.12, beta: 0.62 }), 50);
     this.updateStatus();
     minigameRegistry.current = this;
   }

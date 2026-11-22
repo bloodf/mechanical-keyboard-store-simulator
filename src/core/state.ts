@@ -44,6 +44,8 @@ export interface GameState {
     knownCheater: boolean; // the 🤡 badge
     cheatCount: number;
   };
+  /** Day Grandma Thock last sent rescue money (see workshop.nextDay). */
+  rescueDay?: number;
   /** Set by the v3 → v4 migration: the game hands out the starter stock on load. */
   needsStarterKit?: boolean;
 }
@@ -62,7 +64,7 @@ export interface Shipment {
   cost: number; // cents paid (items + shipping)
 }
 
-export type MailKind = "welcome" | "review" | "complaint" | "membrane" | "delivery" | "cancelled" | "reply";
+export type MailKind = "welcome" | "review" | "complaint" | "membrane" | "delivery" | "cancelled" | "reply" | "gift";
 export interface Mail {
   id: string;
   at: number; // absolute workshop minute when it arrives
@@ -230,6 +232,7 @@ export function validateState(s: unknown): s is GameState {
   if (!isObj(s.inventory)) return false;
   for (const v of Object.values(s.inventory)) if (!isInt(v, 0, 100_000)) return false;
   if (!isStrArr(s.goalsCompleted) || !isStrArr(s.unlocks)) return false;
+  if (s.rescueDay !== undefined && !isInt(s.rescueDay, 1)) return false;
   const p = s.profile;
   if (!isObj(p) || typeof p.name !== "string" || p.name.length > NAME_MAX || typeof p.storeName !== "string" || p.storeName.length > STORE_NAME_MAX) return false;
   if (typeof p.created !== "boolean") return false;

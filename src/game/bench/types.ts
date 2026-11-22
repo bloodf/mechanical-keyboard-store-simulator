@@ -10,7 +10,7 @@ import type { LayoutId } from "../../data/layouts";
 
 /** Which supplier tab to open (with filters) when the player needs to buy something. */
 export interface SupplierPreset {
-  tab: SkuKind;
+  tab: SkuKind | "tool";
   layout?: LayoutId;
   fp?: Footprint;
 }
@@ -80,8 +80,6 @@ export interface TileSpec {
   effects?: SoundMods;
   icon: Painter;
   selected?: boolean;
-  lockedAt?: number | null;
-  badge?: string;
   /** Shown dimmed (e.g. not enough in stock) but still clickable. */
   dim?: boolean;
   onClick: () => void;

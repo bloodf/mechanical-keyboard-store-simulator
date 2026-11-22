@@ -24,7 +24,7 @@ import { confirmNewGame, showTitle } from "../gui/screens/title";
 import { createWorkshopHud, type WorkshopHud } from "../gui/screens/workshopHud";
 import { C, S, T } from "../gui/theme";
 import { button, group, H_CENTER, label, stack, V_BOTTOM } from "../gui/widgets";
-import { formatMoney, t } from "../i18n";
+import { formatMoney, formatNumber, t, type MessageKey } from "../i18n";
 import { defaultStorage, KEYS, SaveManager } from "../save/saveManager";
 import { BenchMode } from "./bench/bench";
 import { minigameRegistry } from "./bench/games/common";
@@ -34,6 +34,13 @@ import { openOrders } from "./panels/orders";
 import { openStock } from "./panels/stock";
 import { openSuppliers } from "./panels/suppliers";
 import { showShipped } from "./results";
+
+/** Reload the page (dev builds let the test harness save its coverage data first). */
+async function reloadPage() {
+  const hook = (window as unknown as { __beforeReload?: () => Promise<void> }).__beforeReload;
+  if (import.meta.env.DEV && hook) await hook().catch(() => undefined);
+  location.reload();
+}
 
 export class Game {
   readonly app: GameApp;
@@ -97,7 +104,7 @@ export class Game {
     }
     if (res === "wiped") {
       this.state = null;
-      location.reload();
+      void reloadPage();
       return false;
     }
     if (res === "failed") this.ws?.ui.toast(t("hud.saveFailed"), "error");
@@ -129,7 +136,7 @@ export class Game {
         col.addControl(label(t("tabs.title"), { size: T.h2, weight: 700, align: H_CENTER, wrap: true }));
         col.addControl(label(t("tabs.body"), { size: T.body, color: C.inkSoft, align: H_CENTER, wrap: true }));
         p.addControl(col);
-        p.addControl(button(t("tabs.useHere"), { w: 260, variant: "primary", y: -S.xl, ha: H_CENTER, va: V_BOTTOM, onClick: () => location.reload() }));
+        p.addControl(button(t("tabs.useHere"), { w: 260, variant: "primary", y: -S.xl, ha: H_CENTER, va: V_BOTTOM, onClick: () => void reloadPage() }));
       });
     const scene = this.app.scene?.scene;
     let frames = 0;
@@ -222,6 +229,7 @@ export class Game {
     unlockAudio();
     this.state = this.saves.newGame();
     startGame(this.state, this.catalog);
+    this.persist(); // the starter stock and the first orders are saved even if the tab closes now
     this.ws!.setStoreName(t("profile.defaultStore"));
     play("progress.dayStart");
     this.openProfile(true);
@@ -250,6 +258,7 @@ export class Game {
       name: s.profile.name,
       storeName: s.profile.storeName,
       onStoreName: (n) => this.ws!.setStoreName(n),
+      onCancel: () => this.ws?.setStoreName(this.state?.profile.storeName || t("profile.defaultStore")),
       onDone: (p) => {
         s.profile = { ...p, created: true };
         this.ws!.setStoreName(p.storeName);
@@ -418,9 +427,24 @@ export class Game {
     this.ui.confirm(t("ws.closeConfirm"), t("ws.closeYes"), t("ws.closeNo"), () => this.endDay(), "confirm-closeday");
   }
 
+  private closing = false;
+  /** 18:00: close once the player has dismissed any open dialog (e.g. the shipping report). */
   private dayOver() {
-    this.ui.toast(t("day.closing"));
-    this.endDay();
+    if (this.closing) return;
+    this.closing = true;
+    const ws = this.ws!;
+    const go = () => {
+      this.closing = false;
+      if (!this.state || !this.hud || !isClosingTime(this.state)) return;
+      this.ui.toast(t("day.closing"));
+      this.endDay();
+    };
+    if (!ws.ui.overlay.children.length) return go();
+    const obs = ws.scene.onBeforeRenderObservable.add(() => {
+      if (ws.ui.overlay.children.length) return;
+      ws.scene.onBeforeRenderObservable.remove(obs);
+      go();
+    });
   }
 
   private endDay() {
@@ -433,7 +457,7 @@ export class Game {
 
   private showDayReport(r: DayReport) {
     const s = this.state!;
-    this.ui.modal({ w: 480, h: 430, name: "day-report" }, (p, close) => {
+    this.ui.modal({ w: 480, h: 520, name: "day-report" }, (p, close) => {
       const col = stack({ w: "84%", y: S.xl, ha: H_CENTER, spacing: S.sm });
       col.addControl(label(`🌙 ${t("day.overTitle", { day: r.day })}`, { size: T.h2, weight: 700, align: H_CENTER }));
       const line = (k: string, v: string, color: string = C.ink) => {
@@ -447,8 +471,11 @@ export class Game {
       line(t("day.expenses"), `−${formatMoney(r.expenses)}`, r.expenses ? C.bad : C.ink);
       col.addControl(label("", { h: 6 }));
       col.addControl(label(t("day.tomorrow"), { size: T.h3, weight: 700 }));
+      if (r.rent) line(t("day.rent"), `−${formatMoney(r.rent)}`, C.bad);
       col.addControl(label(`📋 ${t("ws.newOffers", { count: r.newOffers })}`, { size: T.body }));
       col.addControl(label(`📦 ${t("day.deliveries", { count: r.deliveries })}`, { size: T.body }));
+      col.addControl(label(`✉️ ${t("day.newMail", { count: r.newMail })}`, { size: T.body }));
+      if (r.rescue) col.addControl(label(t("day.rescue", { money: formatMoney(r.rescue) }), { size: T.body, weight: 700, color: C.good }));
       p.addControl(col);
       p.addControl(
         button(t("day.open", { day: s.day }), {
@@ -482,14 +509,53 @@ export class Game {
 
   private openMenu() {
     const ui = this.ui;
-    ui.modal({ w: 420, h: 460, name: "pause", dismissable: true }, (p, close) => {
+    ui.modal({ w: 420, h: 520, name: "pause", dismissable: true }, (p, close) => {
       const col = stack({ w: "80%", y: S.xl, ha: H_CENTER, spacing: S.md });
       col.addControl(label(t("menu.title"), { size: T.h1, weight: 700, align: H_CENTER }));
       col.addControl(button(t("menu.resume"), { w: "100%", variant: "primary", testId: "menu-resume", onClick: close }));
+      col.addControl(button(`📊 ${t("stats.title")}`, { w: "100%", testId: "menu-stats", onClick: () => (close(), this.openStats()) }));
       col.addControl(button(t("profile.editTitle"), { w: "100%", testId: "menu-profile", onClick: () => (close(), this.openProfile(false)) }));
       col.addControl(button(t("settings.open"), { w: "100%", testId: "menu-settings", onClick: () => (close(), openSettings(ui, this.app)) }));
       col.addControl(button(t("menu.quit"), { w: "100%", testId: "menu-quit", onClick: () => (close(), this.goTitle()) }));
       p.addControl(col);
+    });
+  }
+
+  /** Workshop statistics and the most recent deliveries. */
+  private openStats() {
+    const s = this.state!;
+    const ui = this.ui;
+    ui.modal({ w: 620, h: 640, name: "stats", dismissable: true }, (p, close) => {
+      const cw = Math.min(540, ui.W - 60);
+      const col = stack({ w: cw, y: S.xl, ha: H_CENTER, spacing: 4 });
+      col.addControl(label(`📊 ${t("stats.title")}`, { size: T.h2, weight: 700, align: H_CENTER }));
+      const line = (k: string, v: string, color: string = C.ink) => {
+        const g = group({ w: cw, h: 26 });
+        g.addControl(label(k, { size: T.body, weight: 600, color: C.inkSoft }));
+        g.addControl(label(v, { size: T.body, weight: 700, align: 1, color }));
+        col.addControl(g);
+      };
+      const st = s.stats;
+      line(t("stats.days"), String(s.day));
+      line(t("stats.reputation"), `★ ${formatNumber(s.reputation / 100, 1)}`, C.gold);
+      line(t("stats.built"), String(st.keyboardsBuilt));
+      line(t("stats.perfect"), String(st.perfectBuilds), C.good);
+      line(t("stats.profit"), formatMoney(st.totalProfit), st.totalProfit >= 0 ? C.good : C.bad);
+      line(t("stats.late"), String(st.lateDeliveries), st.lateDeliveries ? C.bad : C.ink);
+      line(t("stats.angry"), String(st.angryCustomers), st.angryCustomers ? C.bad : C.ink);
+      line(t("stats.declined"), String(st.ordersDeclined));
+      line(t("stats.membrane"), String(st.membraneExplained));
+      line(t("stats.tools"), `${s.unlocks.filter((u) => u.startsWith("tool.") && u !== "tool.basic_bench").length}`);
+      col.addControl(label(t("stats.recent"), { size: T.h3, weight: 700, h: 34 }));
+      if (!s.history.length) col.addControl(label(t("stats.none"), { size: T.small, color: C.inkSoft }));
+      for (const h of s.history.slice(0, 6)) {
+        const g = group({ w: cw, h: 22 });
+        g.addControl(label(`${t("hud.day", { day: h.day })} · ${h.customer} · ${t(`layout.name.${h.layout}` as MessageKey)}`, { size: T.small, w: cw - 150 }));
+        g.addControl(label(`${"★".repeat(h.stars)}  ${formatMoney(h.profit)}`, { size: T.small, weight: 700, align: 1, color: h.profit >= 0 ? C.good : C.bad }));
+        col.addControl(g);
+      }
+      p.addControl(col);
+      p.addControl(button(t("settings.close"), { w: 200, variant: "primary", y: -S.lg, ha: H_CENTER, va: V_BOTTOM, testId: "stats-close", onClick: close }));
     });
   }
 
@@ -503,6 +569,7 @@ export class Game {
     showCheater(scene.ui, count, () => {
       this.state = this.saves.acceptShame();
       startGame(this.state, this.catalog);
+      this.persist();
       this.makeWorkshop();
       this.openProfile(true);
     });
@@ -531,12 +598,12 @@ export class Game {
             break;
           }
           this.state = null;
-          location.reload();
+          void reloadPage();
         });
         act("debug.wipe", "dbg-wipe", () => {
           this.state = null;
           Object.values(KEYS).forEach((k) => this.kv.removeItem(k));
-          location.reload();
+          void reloadPage();
         });
         p.addControl(col);
       });
@@ -550,6 +617,7 @@ export class Game {
       find: (name: string) => this.ws?.ui.find(name) ?? (this.app.scene as unknown as { ui?: { find(n: string): unknown } })?.ui?.find(name) ?? null,
       step: () => this.state?.activeBuild?.step ?? null,
       state: () => this.state,
+      catalog: () => (this.state ? getCatalog(this.state.seed) : null),
       autoStep: () => this.bench?.autoStep(),
       keyScreen: (id: number) => {
         const b = this.bench?.board;
@@ -561,6 +629,12 @@ export class Game {
       settled: () => this.ws?.cameraSettled() ?? true,
       minigame: () => minigameRegistry.current?.debugPoints() ?? null,
       minigameObj: () => minigameRegistry.current,
+      /** After a test edits the state directly: save and redraw the HUD and the bench. */
+      refresh: () => {
+        this.persist();
+        this.hud?.update();
+        this.bench?.render();
+      },
     };
     void import("../audio/engine").then((engine) =>
       import("../audio/library").then((lib) => ((window as unknown as Record<string, unknown>).__mkssAudio = { renderOffline: engine.renderOffline, ids: lib.SFX_IDS })),

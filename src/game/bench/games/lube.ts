@@ -11,6 +11,7 @@ import { t } from "../../../i18n";
 import { C, S, T } from "../../../gui/theme";
 import { button, label, stack } from "../../../gui/widgets";
 import { switchParts } from "../../../engine/keyboard/switchModels";
+import { lubeZoneBonus } from "../../../build/tools";
 import type { DrawerArea, StepCtx } from "../types";
 import { mat } from "./common";
 
@@ -42,7 +43,8 @@ export class LubeGame {
     private onDone: (r: { quality: number; over: number }) => void,
   ) {
     const scene = ctx.store.scene;
-    this.zone = LUBE_ZONES[sw.type];
+    const bonus = lubeZoneBonus(ctx.state);
+    this.zone = [Math.max(0.04, LUBE_ZONES[sw.type][0] - bonus), Math.min(0.96, LUBE_ZONES[sw.type][1] + bonus)];
     const anchor = ctx.store.layout.benchAnchor.getAbsolutePosition();
     this.root = new TransformNode("lubeGame", scene);
     // in front of the keyboard, on the mat (the typist is at +Z)

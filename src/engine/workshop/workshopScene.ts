@@ -191,7 +191,8 @@ export class WorkshopScene implements GameScene {
     scene.activeCamera = cam;
 
     this.setupPipeline(app.quality);
-    app.onQualityChange.push((q) => this.setupPipeline(q));
+    this.onQuality = (q) => this.setupPipeline(q);
+    app.onQualityChange.push(this.onQuality);
     this.ui = new Ui(scene);
     this.setupLookAround(app.canvas);
 
@@ -318,14 +319,16 @@ export class WorkshopScene implements GameScene {
   }
 
   /** Right-drag (or two-finger drag) to look around the keyboard, wheel to zoom. Left button stays with the minigames. */
+  private offLook: (() => void) | null = null;
+  private onQuality: (q: Quality) => void = () => {};
   private setupLookAround(canvas: HTMLCanvasElement) {
     let drag: { x: number; y: number } | null = null;
-    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-    canvas.addEventListener("pointerdown", (e) => {
+    const menu = (e: Event) => e.preventDefault();
+    const down = (e: PointerEvent) => {
       if (this.attract || (e.button !== 2 && e.button !== 1)) return;
       drag = { x: e.clientX, y: e.clientY };
-    });
-    window.addEventListener("pointermove", (e) => {
+    };
+    const move = (e: PointerEvent) => {
       if (!drag) return;
       const dx = e.clientX - drag.x;
       const dy = e.clientY - drag.y;
@@ -333,18 +336,26 @@ export class WorkshopScene implements GameScene {
       this.user.alpha = Math.max(-0.7, Math.min(0.7, this.user.alpha - dx * 0.004));
       this.user.beta = Math.max(-0.5, Math.min(0.45, this.user.beta - dy * 0.004));
       this.busyT = 0.5;
-    });
-    window.addEventListener("pointerup", () => (drag = null));
-    canvas.addEventListener(
-      "wheel",
-      (e) => {
-        if (this.attract || this.ui.adt.getControlByName("drawer") === null) return;
-        e.preventDefault();
-        this.user.zoom = Math.max(0.55, Math.min(1.6, this.user.zoom * Math.exp(e.deltaY * 0.001)));
-        this.busyT = 0.5;
-      },
-      { passive: false },
-    );
+    };
+    const up = () => (drag = null);
+    const wheel = (e: WheelEvent) => {
+      if (this.attract || this.ui.adt.getControlByName("drawer") === null) return;
+      e.preventDefault();
+      this.user.zoom = Math.max(0.55, Math.min(1.6, this.user.zoom * Math.exp(e.deltaY * 0.001)));
+      this.busyT = 0.5;
+    };
+    canvas.addEventListener("contextmenu", menu);
+    canvas.addEventListener("pointerdown", down);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    canvas.addEventListener("wheel", wheel, { passive: false });
+    this.offLook = () => {
+      canvas.removeEventListener("contextmenu", menu);
+      canvas.removeEventListener("pointerdown", down);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      canvas.removeEventListener("wheel", wheel);
+    };
   }
 
   private updateCameraWants() {
@@ -438,6 +449,9 @@ export class WorkshopScene implements GameScene {
   }
 
   dispose() {
+    this.offLook?.();
+    const i = this.app.onQualityChange.indexOf(this.onQuality);
+    if (i >= 0) this.app.onQualityChange.splice(i, 1);
     this.ui.dispose();
     this.scene.dispose();
   }

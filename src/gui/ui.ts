@@ -18,6 +18,13 @@ export class Ui {
   readonly overlay: Container;
   private toasts: StackPanel;
   private resizeFns = new Set<() => void>();
+  /** Close functions of open dismissable modals (Esc closes the top one). */
+  private dismiss: (() => void)[] = [];
+  private onEsc = (e: KeyboardEvent) => {
+    if (e.key !== "Escape" || !this.dismiss.length) return;
+    e.preventDefault();
+    this.dismiss[this.dismiss.length - 1]();
+  };
   W = 1280;
   H = 800;
   portrait = false;
@@ -47,6 +54,7 @@ export class Ui {
     this.adt.addControl(this.hud);
     this.adt.addControl(this.overlay);
     this.adt.addControl(this.toasts);
+    window.addEventListener("keydown", this.onEsc);
     this.fit();
   }
 
@@ -137,9 +145,13 @@ export class Ui {
       closed = true;
       play("ui.close");
       this.overlay.removeControl(scrim);
+      this.dismiss = this.dismiss.filter((f) => f !== close);
       o.onClose?.();
     };
-    if (o.dismissable) scrim.onPointerClickObservable.add((_, s) => s.target === scrim && close());
+    if (o.dismissable) {
+      scrim.onPointerClickObservable.add((_, s) => s.target === scrim && close());
+      this.dismiss.push(close);
+    }
     scrim.addControl(p);
     build(p, close);
     this.overlay.addControl(scrim);
@@ -171,6 +183,7 @@ export class Ui {
   }
 
   dispose() {
+    window.removeEventListener("keydown", this.onEsc);
     this.adt.dispose();
   }
 }

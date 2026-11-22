@@ -7,3 +7,4 @@ art/build/*.png
 art/build/workshop/
 art/build/*.hdr
 __pycache__/
+coverage

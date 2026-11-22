@@ -10,6 +10,7 @@ import { S, T } from "../../../gui/theme";
 import { button, label, stack } from "../../../gui/widgets";
 import type { DrawerArea, StepCtx } from "../types";
 import { burst, mat, puffs } from "./common";
+import { solderSlowdown } from "../../../build/tools";
 
 export const SOLDER_BEATS = 16;
 const PAD = 1; // ring scale that matches the pad
@@ -80,7 +81,7 @@ export class SolderGame {
   }
 
   private dur() {
-    return Math.max(0.55, 1.0 - this.beat * 0.025);
+    return Math.max(0.55, 1.0 - this.beat * 0.025) * solderSlowdown(this.ctx.state);
   }
   private scaleAt(now: number) {
     const tt = (now - this.beatStart) / 1000;
@@ -179,10 +180,12 @@ export class SolderGame {
       this.beat++;
     }
     this.finished = true;
+    this.ctx.board()?.clearMarkers();
     this.onDone({ quality: 1, missed: [] });
   }
 
   dispose() {
+    this.ctx.board()?.clearMarkers();
     this.iron.dispose(false, true);
     this.ring.dispose();
     this.pad.dispose();

@@ -1,6 +1,8 @@
 # Mechanical Keyboard Store Simulator — Game Plan
 
-> Status **v0.3 "The Workshop"**: the game is now only keyboard manufacturing. Everything happens at the workbench:
+> Status **v0.4**: review pass — bug fixes, workshop tools, daily rent, Grandma's rescue, stats, phone layouts,
+> Esc to close dialogs, and a full test suite (unit + end-to-end, ~97 % combined line coverage, see §10).
+> Before that, **v0.3 "The Workshop"**: the game is now only keyboard manufacturing. Everything happens at the workbench:
 > client orders, stock, suppliers, building, shipping, reviews. The shop floor, walking and characters were removed
 > (your direction after v0.2). The 3D art was rebuilt with a Blender-scripted pipeline (ART.md).
 > Decisions are recorded in §0; what's next is in §10.
@@ -114,6 +116,10 @@ editing, not a determined reverse engineer (normal for a browser-only game).
 ## 8. Economy
 
 - Start: $500 and a starter kit (enough for the first, easy order).
+- Rent: $25 every morning (never below $0). Broke with nothing to build? Grandma Thock mails $200 (once a week).
+- **Tools** (Suppliers → Tools), bought once: switch press (no bent pins), torque screwdriver (wider green zone),
+  lube station (bigger sweet spot, faster), key tester (faster test), temperature-controlled iron (slower ring,
+  faster soldering), packing station (faster packing, +reputation). They unlock with delivered keyboards.
 - Prices per SKU; switch packs of 10/35/70/110 with bulk discounts; lube jars (3 boards); shipping fees.
 - Orders pay 1.1–1.7× a typical parts cost; tips for 4–5 ★; late penalties.
 - Unlocks: better parts appear at the supplier after N delivered keyboards.
@@ -123,7 +129,17 @@ editing, not a determined reverse engineer (normal for a browser-only game).
 See README.md (Layout). Framework-free rules live in `src/build` and `src/core` (unit tested); Babylon code in
 `src/engine`, `src/gui`, `src/game`.
 
-## 10. Next
+## 10. Tests
+
+- **Unit** (vitest, `npm test`): every game rule in `src/build`, `src/core`, `src/save`, `src/data`, `src/i18n`, plus
+  the keycap/board geometry and the keyboard itself in Babylon's NullEngine, the glb reader, the icons (real canvas).
+- **End-to-end** (Playwright, `npm run test:e2e`): the real game in Chromium with real input — smoke (desktop + phone),
+  audio, a full build through every minigame, every workshop screen & button, keyboard variants and deadline
+  paths, phone portrait.
+- **Coverage** (`npm run coverage`): unit coverage (V8) + browser coverage (V8 via DevTools, merged with
+  monocart-coverage-reports) → `coverage/merged/index.html`.
+
+## 11. Next
 
 | Idea | Notes |
 |---|---|

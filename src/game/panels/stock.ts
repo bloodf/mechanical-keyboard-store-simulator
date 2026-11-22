@@ -4,10 +4,10 @@ import { formatClock } from "../../build/workshop";
 import type { GameState } from "../../core/state";
 import type { Catalog } from "../../data/catalog";
 import { formatMoney, t, type MessageKey } from "../../i18n";
-import { openSheet, scrollList } from "../../gui/sheet";
+import { buttonGrid, openSheet, scrollList } from "../../gui/sheet";
 import { C, R, S, T } from "../../gui/theme";
 import type { Ui } from "../../gui/ui";
-import { button, drawBox, H_CENTER, H_RIGHT, label, panel, stack } from "../../gui/widgets";
+import { button, drawBox, H_CENTER, H_RIGHT, label, panel } from "../../gui/widgets";
 import { skuView } from "../skuText";
 
 const CATS: (SkuKind | "all")[] = ["all", "case", "pcb", "plate", "stab", "sw", "kc", "foam", "lube"];
@@ -16,14 +16,18 @@ export function openStock(ui: Ui, o: { state: GameState; catalog: Catalog; onBuy
   let cat: SkuKind | "all" = "all";
   const s = o.state;
   return openSheet(ui, { name: "stock", title: () => `📦 ${t("stock.title")} · ${t("stock.value", { money: formatMoney(stockValue(s.inventory, o.catalog)) })}` }, (body, area, rerender) => {
-    const row = stack({ horizontal: true, h: 38, spacing: 6 });
-    for (const c of CATS) {
-      const n = c === "all" ? Object.keys(s.inventory).length : Object.keys(s.inventory).filter((k) => parseSku(k)?.kind === c).length;
-      row.addControl(button(`${t(`stock.cat.${c}` as MessageKey)}${n ? ` (${n})` : ""}`, { w: ui.portrait ? 84 : 118, h: 38, size: "sm", variant: cat === c ? "dark" : "secondary", testId: `stockcat-${c}`, onClick: () => ((cat = c), rerender()) }));
-    }
-    body.addControl(row);
-    const { viewer, content } = scrollList(area.w, area.h - 52, "stock-list");
-    viewer.top = "52px";
+    const grid = buttonGrid(
+      CATS.map((c) => {
+        const n = c === "all" ? Object.keys(s.inventory).length : Object.keys(s.inventory).filter((k) => parseSku(k)?.kind === c).length;
+        return { text: `${t(`stock.cat.${c}` as MessageKey)}${n ? ` (${n})` : ""}`, active: cat === c, testId: `stockcat-${c}`, onClick: () => ((cat = c), rerender()) };
+      }),
+      area.w,
+      { minW: 110, maxW: 130 },
+    );
+    body.addControl(grid.control);
+    const top = grid.height + 12;
+    const { viewer, content } = scrollList(area.w, area.h - top, "stock-list");
+    viewer.top = `${top}px`;
     body.addControl(viewer);
     const w = area.w - 24;
     const skus = Object.keys(s.inventory)
@@ -35,11 +39,12 @@ export function openStock(ui: Ui, o: { state: GameState; catalog: Catalog; onBuy
     }
     for (const sku of skus) {
       const v = skuView(sku, o.catalog);
+      const countW = w < 600 ? 70 : 160;
       const r = panel({ w, h: 64, radius: R.sm, bg: C.white, shadow: false, border: C.line, thickness: 1, name: `stock-${sku}` });
       r.addControl(drawBox(v.icon, { w: 72, h: 52, x: 8, y: 6 }));
-      r.addControl(label(v.title, { size: T.body, weight: 700, x: 92, y: 8, h: 24, w: w - 320 }));
-      r.addControl(label(v.sub, { size: T.tiny + 1, color: C.inkSoft, x: 92, y: 33, h: 20, w: w - 320 }));
-      r.addControl(label(t("stock.count", { count: s.inventory[sku] }), { size: T.h3, weight: 700, x: -S.xl, y: 0, w: 160, h: 64, align: 1, ha: H_RIGHT }));
+      r.addControl(label(v.title, { size: T.body, weight: 700, x: 92, y: 8, h: 24, w: w - 100 - countW, ellipsis: true }));
+      r.addControl(label(v.sub, { size: T.tiny + 1, color: C.inkSoft, x: 92, y: 33, h: 20, w: w - 100 - countW, ellipsis: true }));
+      r.addControl(label(t("stock.count", { count: s.inventory[sku] }), { size: T.h3, weight: 700, x: -S.md, y: 0, w: countW, h: 64, align: 1, ha: H_RIGHT }));
       content.addControl(r);
     }
     // on the way

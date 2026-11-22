@@ -20,6 +20,7 @@ import {
   type SoundMods,
 } from "../data/parts";
 import type { BuildSession, FeelReq, LayoutReq, SoundWord } from "./types";
+import { parseSku, unitPrice } from "./stock";
 
 export type Axis = "depth" | "brightness" | "hollow" | "volume" | "scratch" | "rattle" | "click";
 export const AXES: Axis[] = ["depth", "brightness", "hollow", "scratch", "rattle", "volume", "click"];
@@ -236,7 +237,21 @@ export interface CostLine {
   cents: number;
 }
 
+/**
+ * What the parts in this build cost. Parts taken from stock are valued at the supplier's unit price;
+ * a session without stock records (older saves, tests) falls back to the catalog list prices.
+ */
 export function partsCost(b: BuildSession, cat: Catalog): { total: number; lines: CostLine[] } {
+  const reserved = Object.entries(b.reserved ?? {});
+  if (reserved.length) {
+    const lines: CostLine[] = [];
+    for (const [sku, n] of reserved) {
+      const kind = parseSku(sku)?.kind;
+      const part: CostLine["part"] = kind === "foam" || kind === "lube" ? "damp" : kind === "stab" ? "stabs" : kind === "sw" ? "switches" : kind === "kc" ? "keycaps" : (kind ?? "case");
+      lines.push({ part, cents: (unitPrice(sku, cat) ?? 0) * n });
+    }
+    return { total: lines.reduce((t, l) => t + l.cents, 0), lines };
+  }
   const lines: CostLine[] = [];
   const f = b.layout ? LAYOUT_PRICE_FACTOR[b.layout] : 1;
   const keys = b.layout ? getLayout(b.layout).keys.length : 0;

@@ -1,12 +1,12 @@
 // Renders every sound effect offline in a real browser and checks it: not silent, no NaN,
 // not clipping, and it finishes inside its time budget. Prints a loudness table.
 // Needs `npm run dev` running (the hook is dev-only).
-const { chromium } = require("playwright");
-const BASE = process.env.BASE_URL || "http://localhost:5173/";
+const { launch, trackCoverage, BASE } = require("./helpers.cjs");
 
 (async () => {
-  const browser = await chromium.launch();
+  const browser = await launch();
   const page = await browser.newPage();
+  await trackCoverage(page);
   await page.goto(BASE, { timeout: 240000 });
   await page.waitForFunction(() => window.__mkssAudio, null, { timeout: 240000 });
   const rows = await page.evaluate(async () => {

@@ -6,7 +6,6 @@ import type { Catalog } from "../../data/catalog";
 import { formatMoney, t, tx, type MessageKey } from "../../i18n";
 import { C, R, S, T } from "../../gui/theme";
 import { button, chip, drawBox, group, H_RIGHT, label, panel, stack } from "../../gui/widgets";
-void group;
 import { radarPainter } from "./radar";
 
 export function quoteText(job: JobRequest): string {
@@ -62,7 +61,7 @@ export function dueText(job: Order, day: number): { text: string; late: boolean 
   return left < 0 ? { text: t("orders.late", { count: -left }), late: true } : { text: t("orders.dueIn", { count: left }), late: false };
 }
 
-export function ticketPanel(job: Order, b: BuildSession | null, cat: Catalog, o: { w: number; h: number; day: number; onHide?: () => void; withRadar?: boolean }): Control {
+export function ticketPanel(job: Order, b: BuildSession, cat: Catalog, o: { w: number; h: number; day: number; onHide?: () => void; withRadar?: boolean }): Control {
   const p = panel({ w: o.w, h: o.h, radius: R.lg, name: "ticket" });
   const inner = o.w - 2 * S.lg;
   const col = stack({ w: inner, x: S.lg, y: S.md, spacing: S.xs });
@@ -75,9 +74,10 @@ export function ticketPanel(job: Order, b: BuildSession | null, cat: Catalog, o:
   const due = dueText(job, o.day);
   meta.addControl(chip(`📅 ${due.text}`, { bg: due.late ? C.bad : C.blueSoft, color: due.late ? C.white : C.blue, size: T.tiny + 1, h: 24 }));
   col.addControl(meta);
-  col.addControl(label(`“${quoteText(job)}”`, { size: T.small, italic: true, wrap: true, color: C.ink }));
+  // the quote gets what's left after the header, wishes and bill (long quotes end with "…")
+  col.addControl(label(`“${quoteText(job)}”`, { size: T.small, italic: true, color: C.ink, w: inner, h: Math.max(38, Math.min(150, o.h - 270)), ellipsis: true, valign: 0 }));
   col.addControl(chipsWrap(wantsList(job), inner));
-  if (b) {
+  {
     const cost = partsCost(b, cat).total;
     const profit = job.budget - cost;
     const bill = (k: string, v: string, color: string = C.ink) => {
@@ -95,10 +95,6 @@ export function ticketPanel(job: Order, b: BuildSession | null, cat: Catalog, o:
       const rh = Math.min(190, o.h - 400);
       if (rh >= 100) col.addControl(drawBox(radarPainter(() => ({ profile: computeProfile(b, cat).sound, target: targetRanges(job.sound) })), { w: inner, h: rh }));
     }
-  } else {
-    const r = group({ w: inner, h: 26 });
-    r.addControl(label(`${t("ticket.budget")} ${formatMoney(job.budget)}`, { size: T.body, weight: 700, color: C.good }));
-    col.addControl(r);
   }
   p.addControl(col);
   return p;

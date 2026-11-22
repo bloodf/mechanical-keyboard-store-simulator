@@ -119,3 +119,11 @@ export const cartIcon: Painter = (g, x, y, w, h, r) => {
   g.textBaseline = "middle";
   g.fillText("🛒", x + w / 2, y + h / 2);
 };
+
+const TOOL_EMOJI: Record<string, string> = { lubeStation: "🧴", switchPress: "🗜️", solderStation: "🔥", torqueDriver: "🪛", keyTester: "🧪", packingStation: "📦" };
+export const toolIcon = (id: string): Painter => (g, x, y, w, h, r) => {
+  g.font = `${34 * r}px sans-serif`;
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.fillText(TOOL_EMOJI[id] ?? "🛠", x + w / 2, y + h / 2);
+};

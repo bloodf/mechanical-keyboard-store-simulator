@@ -3,6 +3,7 @@ import type { Control } from "@babylonjs/gui";
 import { play } from "../../audio/engine";
 import { computeProfile, findSwitch, layoutMatches, soundMatch, stabCount, targetRanges } from "../../build/profile";
 import { applyInstall, applySolder, isHotswap, unresolvedFaults } from "../../build/session";
+import { canBendPins } from "../../build/tools";
 import { footprintOf, parseSku, skuCase, skuFoam, skuKeycaps, skuPcb, skuPlate, skuStab, skuSwitch, SKU_LUBE, type Footprint } from "../../build/stock";
 import type { BuildSession } from "../../build/types";
 import { getLayout, type LayoutId } from "../../data/layouts";
@@ -92,10 +93,8 @@ function invalidate(ctx: StepCtx, what: { layout?: boolean; fp?: boolean }) {
     if (cur.plate) (ctx.release(cur.plate), (b.plate = null));
     if (b.plate === "none" && what.layout) b.plate = null;
   }
-  if (what.fp) {
-    if (cur.stab) (ctx.release(cur.stab), (b.stabs = null), (b.stabLube = null));
-    if (cur.kc) (ctx.release(cur.kc), (b.keycapsId = null));
-  }
+  // (keycaps come after the switches are installed, when earlier steps can't change anymore)
+  if (what.fp && cur.stab) (ctx.release(cur.stab), (b.stabs = null), (b.stabLube = null));
   if ((what.layout || what.fp) && cur.sw) {
     ctx.release(cur.sw, b.reserved[cur.sw] ?? 0);
     b.switchId = null;
@@ -673,7 +672,7 @@ export function installStep(ctx: StepCtx): StepView {
     if (board.isSwitchInstalled(key)) return;
     board.setSwitchInstalled(key, true);
     ctx.wake();
-    if (isHotswap(ctx.session) && speed > BEND_SPEED && Math.random() < 0.4) {
+    if (isHotswap(ctx.session) && canBendPins(ctx.state) && speed > BEND_SPEED && Math.random() < 0.4) {
       bent.push(key);
       play("bench.deadKey", { volume: 0.5 });
       burst(sparks, board.keyWorld(key), 18);
@@ -1022,6 +1021,7 @@ export function soundStep(ctx: StepCtx): StepView {
                 s.damp = [...s.damp, d.id];
                 if (d.id === "tape" && s.tapeQuality === null) s.tapeQuality = 0.6;
               }
+              ctx.board()?.setDampening(s.damp, false);
               play("bench.foam");
               ctx.update();
               ctx.rerender();

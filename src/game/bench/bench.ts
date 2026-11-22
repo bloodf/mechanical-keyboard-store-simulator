@@ -260,7 +260,7 @@ export class BenchMode {
     const prev = prevStep(b);
     const foot = stack({ horizontal: true, h: 52, spacing: S.sm, x: -pad, y: -S.md, ha: H_RIGHT, va: V_BOTTOM });
     if (prev && canGoBack(b)) foot.addControl(button(`← ${t("bench.back")}`, { w: portrait ? 100 : 140, testId: "btn-back", onClick: () => (play("ui.back"), this.openStep(prev)) }));
-    const mins = stepMinutes(b, b.step);
+    const mins = stepMinutes(b, b.step, this.o.state);
     const nextBtn = button(`${t("bench.next")} →`, {
       w: portrait ? 170 : 230,
       variant: "primary",
@@ -338,7 +338,7 @@ export class BenchMode {
   private finishStep() {
     const b = this.session!;
     if (!stepDone(b, b.step)) return;
-    const mins = stepMinutes(b, b.step);
+    const mins = stepMinutes(b, b.step, this.o.state);
     const next = nextStep(b);
     play("ui.confirm");
     this.openStep(next);
@@ -397,7 +397,7 @@ export class BenchMode {
     p.addControl(label(t("step.deliver.hint"), { size: T.body, color: C.inkSoft, x: S.xl, y: S.lg + 38, h: 24, w: w - 2 * S.xl }));
     const row = stack({ horizontal: true, h: 56, spacing: S.md, y: -S.lg, ha: H_CENTER, va: V_BOTTOM });
     row.addControl(button(`← ${t("bench.back")}`, { w: 130, testId: "btn-back", onClick: () => this.openStep(prevStep(b)!) }));
-    row.addControl(button(t("bench.ship", { name: b.job.customer.name.split(" ")[0] }), { w: 300, variant: "primary", testId: "btn-next", sub: `⏱ ${t("bench.minutes", { min: stepMinutes(b, "deliver") })}`, onClick: () => this.ship() }));
+    row.addControl(button(t("bench.ship", { name: b.job.customer.name.split(" ")[0] }), { w: 300, variant: "primary", testId: "btn-next", sub: `⏱ ${t("bench.minutes", { min: stepMinutes(b, "deliver", this.o.state) })}`, onClick: () => this.ship() }));
     p.addControl(row);
     root.addControl(p);
     ui.setScreen(root);
@@ -415,7 +415,7 @@ export class BenchMode {
     if (board && outcome.stars >= 4) board.layout.keys.forEach((k, i) => setTimeout(() => (board.pressKey(k.id), this.o.wake()), i * 15));
     this.ui.setScreen(group({ name: "bench-ui" }));
     this.o.onShipped(b, r, outcome);
-    this.o.onWork(stepMinutes(b, "deliver"));
+    this.o.onWork(stepMinutes(b, "deliver", this.o.state));
   }
 
   private confirmAside() {

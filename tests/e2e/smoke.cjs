@@ -93,8 +93,16 @@ async function run(name, mobile) {
   await g.waitFor("cheater-title");
   ok(true, "reloading does not escape the cheater screen");
   await g.waitFor("btn-start-over", 60000);
-  await g.click("btn-start-over");
-  await g.waitFor("profile-done", 240000); // builds the whole workshop scene again (slow in software GL)
+  // builds the whole workshop scene again (slow in software GL); retry the tap if it didn't register
+  for (let i = 0; i < 3; i++) {
+    if (await g.find("btn-start-over")) await g.click("btn-start-over");
+    try {
+      await g.waitFor("profile-done", 120000);
+      break;
+    } catch (e) {
+      if (i === 2) throw e;
+    }
+  }
   await g.click("profile-done");
   await g.waitFor("hud-cheater");
   const after = await g.state();

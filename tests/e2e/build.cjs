@@ -78,10 +78,10 @@ const { ok, launch, newGamePage } = require("./helpers.cjs");
   await g.clickTile("damp-tape");
   await g.click("tape-start");
   await page.waitForTimeout(1500);
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 10; i++) {
     await settle();
     const lanes = await mg();
-    const lane = lanes.find((l) => !l.done);
+    const lane = lanes && lanes.find((l) => !l.done);
     if (!lane) break;
     await drag([lane.a, { x: (lane.a.x * 2 + lane.b.x) / 3, y: (lane.a.y * 2 + lane.b.y) / 3 }, { x: (lane.a.x + lane.b.x * 2) / 3, y: (lane.a.y + lane.b.y * 2) / 3 }, lane.b], 4);
     await page.waitForTimeout(400);

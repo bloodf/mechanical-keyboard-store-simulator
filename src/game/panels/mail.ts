@@ -16,6 +16,18 @@ export function mailSubject(m: Mail): string {
   return t(`mail.subject.${m.kind}` as MessageKey);
 }
 
+/** One letter: subject, sender & time, stars for reviews, the text. */
+function mailBody(m: Mail, w: number, h: number) {
+  const p = panel({ w, h, radius: R.md, bg: C.white, shadow: false, border: C.line, thickness: 1, name: "mail-open" });
+  const col = stack({ w: w - 2 * S.xl, x: S.xl, y: S.xl, spacing: S.sm });
+  col.addControl(label(mailSubject(m), { size: T.h2, weight: 700, h: 36, color: m.kind === "complaint" || m.kind === "cancelled" ? C.bad : C.ink }));
+  col.addControl(label(`${mailFrom(m)} · ${t("hud.day", { day: Math.floor(m.at / 1440) + 1 })} ${formatClock(m.at % 1440)}`, { size: T.small, color: C.inkSoft, h: 22 }));
+  if (m.stars) col.addControl(label("★".repeat(m.stars) + "☆".repeat(5 - m.stars), { size: 34, weight: 700, color: C.gold, h: 44 }));
+  col.addControl(label(tx(m.key, m.params), { size: T.body + 1, wrap: true, lineSpacing: 4, h: h - 160, valign: 0 }));
+  p.addControl(col);
+  return p;
+}
+
 export function openMail(ui: Ui, o: { state: GameState; persist: () => void; onChanged: () => void }) {
   const s = o.state;
   let open: string | null = inbox(s).find((m) => !m.read)?.id ?? inbox(s)[0]?.id ?? null;
@@ -45,18 +57,14 @@ export function openMail(ui: Ui, o: { state: GameState; persist: () => void; onC
           o.onChanged();
         }
         rerender();
+        if (ui.portrait) ui.modal({ w: ui.W - 24, h: Math.min(520, ui.H - 40), name: "mail-read", dismissable: true }, (p) => p.addControl(mailBody(m, ui.W - 24, Math.min(520, ui.H - 40))));
       });
       content.addControl(r);
     });
     const m = list.find((x) => x.id === open);
     if (m && !ui.portrait) {
-      const p = panel({ w: area.w - leftW - S.lg, h: area.h, x: leftW + S.lg, radius: R.md, bg: C.white, shadow: false, border: C.line, thickness: 1, name: "mail-open" });
-      const col = stack({ w: area.w - leftW - S.lg - 2 * S.xl, x: S.xl, y: S.xl, spacing: S.sm });
-      col.addControl(label(mailSubject(m), { size: T.h2, weight: 700, h: 36, color: m.kind === "complaint" || m.kind === "cancelled" ? C.bad : C.ink }));
-      col.addControl(label(`${mailFrom(m)} · ${t("hud.day", { day: Math.floor(m.at / 1440) + 1 })} ${formatClock(m.at % 1440)}`, { size: T.small, color: C.inkSoft, h: 22 }));
-      if (m.stars) col.addControl(label("★".repeat(m.stars) + "☆".repeat(5 - m.stars), { size: 34, weight: 700, color: C.gold, h: 44 }));
-      col.addControl(label(tx(m.key, m.params), { size: T.body + 1, wrap: true, lineSpacing: 4, h: area.h - 160, valign: 0 }));
-      p.addControl(col);
+      const p = mailBody(m, area.w - leftW - S.lg, area.h);
+      p.left = `${leftW + S.lg}px`;
       body.addControl(p);
     }
   });

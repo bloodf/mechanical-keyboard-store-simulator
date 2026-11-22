@@ -90,7 +90,6 @@ export class Board {
   private mmNode: TransformNode;
   readonly layout: Layout;
   family: SwitchFamily = "mx";
-  private owned: { dispose(): void }[] = [];
   private tweens: Tween[] = [];
   private caseNode: TransformNode;
   private pcbNode: TransformNode;
@@ -194,7 +193,6 @@ export class Board {
     if (o.tex) {
       m.albedoTexture = o.tex;
     }
-    this.owned.push(m);
     return m;
   }
 
@@ -293,7 +291,7 @@ export class Board {
   private buildCase(animate: boolean) {
     this.caseNode.getChildMeshes().forEach((m) => {
       this.shadows?.removeShadowCaster(m);
-      m.dispose();
+      m.dispose(false, true);
     });
     const def = this.caseDef;
     const hex = this.caseHex;
@@ -384,7 +382,6 @@ export class Board {
     }
     t.update();
     t.wrapU = t.wrapV = Texture.WRAP_ADDRESSMODE;
-    this.owned.push(t);
     return t;
   }
 
@@ -397,7 +394,6 @@ export class Board {
     g.fillRect(0, 0, 8, 3);
     t.update();
     t.wrapU = t.wrapV = Texture.WRAP_ADDRESSMODE;
-    this.owned.push(t);
     return t;
   }
 
@@ -411,7 +407,7 @@ export class Board {
 
   private buildFoams() {
     for (const k of Object.keys(this.foams)) {
-      this.foams[k]?.dispose();
+      this.foams[k]?.dispose(false, true);
       this.foams[k] = null;
     }
     const S = this.stack;
@@ -482,7 +478,7 @@ export class Board {
   }
 
   private buildPcb(animate: boolean) {
-    this.pcbNode.getChildMeshes(true).forEach((m) => m.dispose());
+    this.pcbNode.getChildMeshes(true).forEach((m) => m.dispose(false, true));
     const def = this.pcbDef;
     if (!def) return;
     const S = this.stack;
@@ -614,7 +610,6 @@ export class Board {
     g.fillText(text, 6 * ppm, h - 2 * ppm);
     g.restore();
     t.update();
-    this.owned.push(t);
     return t;
   }
 
@@ -639,7 +634,7 @@ export class Board {
   }
 
   setTape(strips: { row: number; offset: number; from?: number; to?: number }[]) {
-    this.tapeNode.getChildMeshes().forEach((m) => m.dispose());
+    this.tapeNode.getChildMeshes().forEach((m) => m.dispose(false, true));
     const L = this.layout;
     const rows = Math.ceil(L.depth);
     const mat = this.pbr("tape", "#cfe3ff", { alpha: 0.9, rough: 0.35 });
@@ -665,7 +660,7 @@ export class Board {
 
   private buildPlate(animate: boolean) {
     if (this.plateMesh) this.shadows?.removeShadowCaster(this.plateMesh);
-    this.plateMesh?.dispose();
+    this.plateMesh?.dispose(false, true);
     this.plateMesh = null;
     const def = this.plateDef;
     if (!def || def.id === "none") return;
@@ -695,7 +690,6 @@ export class Board {
       }
     t.update();
     t.uScale = t.vScale = 40;
-    this.owned.push(t);
     return t;
   }
 
@@ -707,7 +701,7 @@ export class Board {
   }
 
   private buildStabs(animate: boolean) {
-    this.stabNode.getChildMeshes().forEach((m) => m.dispose());
+    this.stabNode.getChildMeshes().forEach((m) => m.dispose(false, true));
     const def = this.stabDef;
     if (!def) return;
     const S = this.stack;
@@ -753,7 +747,7 @@ export class Board {
   private buildSwitchMeshes() {
     this.swMeshes.forEach((m) => {
       this.shadows?.removeShadowCaster(m);
-      m.dispose();
+      m.dispose(false, true);
     });
     this.swMeshes = [];
     const sw = this.sw;
@@ -836,7 +830,7 @@ export class Board {
   setKeycaps(set: KeycapSet | null) {
     this.capNode.getChildMeshes().forEach((m) => {
       this.shadows?.removeShadowCaster(m);
-      m.dispose();
+      m.dispose(false, true);
     });
     this.caps.fill(null);
     this.capSet = set;
@@ -890,7 +884,6 @@ export class Board {
       solid[kind] = [(u0 + u1) / 2, (v0 + v1) / 2];
     });
     tex.update();
-    this.owned.push(tex);
     const rough = set.material === "pbt" ? 0.7 : set.material === "abs" ? 0.4 : 0.52;
     const mat = this.pbr(`caps-${set.id}`, "#ffffff", { rough, tex });
     mat.albedoColor = Color3.White();
@@ -978,7 +971,7 @@ export class Board {
   keyWorld(i: number, aboveMm?: number): Vector3 {
     const [cx, cy] = this.keyCap(this.layout.keys[i]);
     const y = aboveMm ?? this.geo.capZ + 12;
-    return Vector3.TransformCoordinates(new Vector3(-cx, y, -cy), this.mmNode.getWorldMatrix());
+    return Vector3.TransformCoordinates(new Vector3(-cx, y, -cy), this.mmNode.computeWorldMatrix(true));
   }
 
   setMarker(i: number, color: "green" | "red" | "orange" | "yellow" | null) {
@@ -1052,9 +1045,8 @@ export class Board {
   dispose() {
     this.base.getChildMeshes().forEach((m) => {
       this.shadows?.removeShadowCaster(m);
-      m.dispose();
+      m.dispose(false, true);
     });
     this.base.dispose();
-    this.owned.forEach((o) => o.dispose());
   }
 }

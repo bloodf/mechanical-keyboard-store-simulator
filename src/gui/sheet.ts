@@ -32,7 +32,7 @@ export function openSheet(
   const h = Math.min(o.h ?? 700, ui.H - 24);
   closeFn = ui.modal({ w, h, name: o.name, dismissable: true, onClose: o.onClose }, (p, close) => {
     p.background = C.paper;
-    titleLbl = label(o.title(), { size: T.h2, weight: 700, x: S.xl, y: S.lg, h: 36, w: w - 200 });
+    titleLbl = label(o.title(), { size: ui.portrait ? T.h3 : T.h2, weight: 700, x: S.xl, y: S.lg, h: 36, w: w - 100, ellipsis: true });
     p.addControl(titleLbl);
     p.addControl(button("✕", { w: 44, h: 40, size: "sm", x: -S.lg, y: S.md, ha: H_RIGHT, testId: `${o.name}-close`, onClick: close }));
     area = { w: w - 2 * S.xl, h: h - 64 - S.lg };
@@ -79,4 +79,29 @@ export function badge(n: number, o: { x?: number; y?: number; name?: string } = 
   circle.top = `${o.y ?? -6}px`;
   circle.addControl(label(String(n), { size: T.tiny, weight: 700, color: C.white, align: 2, w: 24, h: 24 }));
   return circle;
+}
+
+export interface GridButton {
+  text: string;
+  active: boolean;
+  testId: string;
+  onClick: () => void;
+}
+
+/** A row of toggle buttons that wraps onto more rows on narrow screens. Returns the control and its height. */
+export function buttonGrid(items: GridButton[], width: number, o: { h?: number; minW?: number; maxW?: number; gap?: number; y?: number } = {}): { control: Container; height: number } {
+  const h = o.h ?? 38;
+  const gap = o.gap ?? 6;
+  const minW = o.minW ?? 96;
+  const perRow = Math.max(1, Math.min(items.length, Math.floor((width + gap) / (minW + gap))));
+  const rows = Math.ceil(items.length / perRow);
+  const bw = Math.min(o.maxW ?? 140, (width - gap * (perRow - 1)) / perRow);
+  const c = group({ w: width, h: rows * h + (rows - 1) * gap, y: o.y ?? 0 });
+  items.forEach((it, i) => {
+    const b = button(it.text, { w: bw, h, size: "sm", variant: it.active ? "dark" : "secondary", testId: it.testId, onClick: it.onClick });
+    b.left = `${(i % perRow) * (bw + gap)}px`;
+    b.top = `${Math.floor(i / perRow) * (h + gap)}px`;
+    c.addControl(b);
+  });
+  return { control: c, height: rows * h + (rows - 1) * gap };
 }

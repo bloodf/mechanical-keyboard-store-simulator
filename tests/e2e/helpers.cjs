@@ -14,14 +14,87 @@ function ok(cond, msg) {
   console.log("  ok -", msg);
 }
 
+// ---- Coverage (COVERAGE=1): precise V8 coverage of the game's own modules (src/**/*.ts), taken through the
+// DevTools protocol. Snapshots are taken before every reload (the page's scripts and their counts are gone after a
+// navigation) and when the browser closes; scripts/coverage.mjs merges them all.
+const COV = !!process.env.COVERAGE;
+const COV_DIR = path.join(__dirname, "../../coverage/e2e-raw");
+const tracked = new Map(); // page -> { cdp, scripts, snapshot }
+let covN = 0;
+
+async function trackCoverage(page) {
+  if (!COV || tracked.has(page)) return;
+  const cdp = await page.context().newCDPSession(page);
+  const scripts = new Map();
+  cdp.on("Debugger.scriptParsed", (e) => {
+    if (/\/src\/.+\.ts(\?|$)/.test(e.url)) scripts.set(e.scriptId, e.url);
+  });
+  await cdp.send("Debugger.enable");
+  await cdp.send("Profiler.enable");
+  await cdp.send("Profiler.startPreciseCoverage", { callCount: true, detailed: true });
+  const sources = new Map();
+  const snapshot = async () => {
+    let result;
+    try {
+      ({ result } = await cdp.send("Profiler.takePreciseCoverage"));
+    } catch {
+      return;
+    }
+    const entries = [];
+    for (const r of result) {
+      const url = scripts.get(r.scriptId);
+      if (!url) continue;
+      let source = sources.get(r.scriptId);
+      if (source === undefined) {
+        try {
+          source = (await cdp.send("Debugger.getScriptSource", { scriptId: r.scriptId })).scriptSource;
+        } catch {
+          continue;
+        }
+        sources.set(r.scriptId, source);
+      }
+      entries.push({ url, scriptId: r.scriptId, source, functions: r.functions });
+    }
+    if (!entries.length) return;
+    fs.mkdirSync(COV_DIR, { recursive: true });
+    fs.writeFileSync(path.join(COV_DIR, `${path.basename(process.argv[1], ".cjs")}-${process.pid}-${++covN}.json`), JSON.stringify(entries));
+  };
+  tracked.set(page, { cdp, snapshot });
+  // reloads started by the tests…
+  for (const m of ["reload", "goto"]) {
+    const orig = page[m].bind(page);
+    page[m] = async (...args) => {
+      await snapshot();
+      return orig(...args);
+    };
+  }
+  // …and by the game itself (wipe, tamper demo, another tab, cleared storage)
+  await page.exposeFunction("__beforeReload", snapshot);
+  page.on("close", () => tracked.delete(page));
+}
+
+async function saveCoverage(page) {
+  const t = tracked.get(page);
+  if (!t) return;
+  await t.snapshot();
+  tracked.delete(page);
+}
+
 async function launch() {
-  return chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
+  const browser = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
+  const close = browser.close.bind(browser);
+  browser.close = async () => {
+    for (const p of [...tracked.keys()]) await saveCoverage(p);
+    return close();
+  };
+  return browser;
 }
 
 async function newGamePage(browser, { mobile = false, context = null } = {}) {
   const ctx = context ?? (mobile ? await browser.newContext({ ...devices["iPhone 13"] }) : await browser.newContext({ viewport: { width: 1280, height: 720 } }));
   const page = await ctx.newPage();
   page.setDefaultTimeout(150000);
+  await trackCoverage(page);
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
@@ -80,4 +153,4 @@ async function newGamePage(browser, { mobile = false, context = null } = {}) {
   return api;
 }
 
-module.exports = { ok, launch, newGamePage, BASE, OUT };
+module.exports = { ok, launch, newGamePage, trackCoverage, saveCoverage, BASE, OUT };

@@ -29,15 +29,16 @@ export function openOrders(ui: Ui, o: OrdersOpts) {
   };
   const sheet = openSheet(ui, { name: "orders", title: () => `📋 ${t("orders.title")}` }, (body, area, rerender, close) => {
     const tabs = stack({ horizontal: true, h: 40, spacing: S.sm });
-    tabs.addControl(button(t("orders.tab.new", { count: s.offers.length }), { w: 220, h: 40, size: "sm", variant: tab === "new" ? "dark" : "secondary", testId: "orders-tab-new", onClick: () => ((tab = "new"), rerender()) }));
-    tabs.addControl(button(t("orders.tab.accepted", { count: s.accepted.length + (s.activeBuild ? 1 : 0) }), { w: 220, h: 40, size: "sm", variant: tab === "accepted" ? "dark" : "secondary", testId: "orders-tab-accepted", onClick: () => ((tab = "accepted"), rerender()) }));
+    const tw = Math.min(220, (area.w - S.sm) / 2);
+    tabs.addControl(button(t("orders.tab.new", { count: s.offers.length }), { w: tw, h: 40, size: "sm", variant: tab === "new" ? "dark" : "secondary", testId: "orders-tab-new", onClick: () => ((tab = "new"), rerender()) }));
+    tabs.addControl(button(t("orders.tab.accepted", { count: s.accepted.length + (s.activeBuild ? 1 : 0) }), { w: tw, h: 40, size: "sm", variant: tab === "accepted" ? "dark" : "secondary", testId: "orders-tab-accepted", onClick: () => ((tab = "accepted"), rerender()) }));
     body.addControl(tabs);
     const listH = area.h - 52;
     const { viewer, content } = scrollList(area.w, listH, "orders-list");
     viewer.top = "52px";
     body.addControl(viewer);
     const cw = area.w - 24;
-    const ch = ui.portrait ? 250 : 188;
+    const ch = ui.portrait ? 296 : 188;
     const empty = (text: string) => content.addControl(label(text, { size: T.body, color: C.inkSoft, align: H_CENTER, h: 80, w: cw }));
     if (tab === "new") {
       if (!s.offers.length) empty(t("orders.emptyNew"));

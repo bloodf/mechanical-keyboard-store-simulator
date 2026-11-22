@@ -7,8 +7,8 @@ import { S, T } from "../../../gui/theme";
 import { drawBox, label, stack, type DrawBox } from "../../../gui/widgets";
 import type { DrawerArea, StepCtx } from "../types";
 import { mat, minigameRegistry } from "./common";
+import { screwZone } from "../../../build/tools";
 
-const ZONE: [number, number] = [0.6, 0.82];
 
 export class ScrewGame {
   private screws: { node: TransformNode; head: Mesh; state: "open" | "tight" | "loose" | "stripped" }[] = [];
@@ -20,11 +20,13 @@ export class ScrewGame {
   private finished = false;
   private gauge: DrawBox;
   private status = label("", { size: T.h3, weight: 700 });
+  private zone: [number, number];
 
   constructor(
     private ctx: StepCtx,
     private onDone: (r: { quality: number; loose: number; stripped: number }) => void,
   ) {
+    this.zone = screwZone(ctx.state);
     const scene = ctx.store.scene;
     const board = ctx.board()!;
     const n = board.layout.id === "tkl" || board.layout.id === "full" ? 8 : 6;
@@ -89,7 +91,7 @@ export class ScrewGame {
       g.stroke();
     };
     arc(0, 1, "#e9dfcf");
-    arc(ZONE[0], ZONE[1], "#2ea05a");
+    arc(this.zone[0], this.zone[1], "#2ea05a");
     arc(0.97, 1, "#e23b4e");
     const a = Math.PI + this.torque * Math.PI;
     g.strokeStyle = "#2b2118";
@@ -136,7 +138,7 @@ export class ScrewGame {
       color("#e87a86");
       play("ui.error");
       this.ctx.ui.toast(t("screws.stripped"), "error");
-    } else if (this.torque >= ZONE[0] && this.torque <= ZONE[1]) {
+    } else if (this.torque >= this.zone[0] && this.torque <= this.zone[1]) {
       s.state = "tight";
       color("#7ed69a");
       play("ui.confirm");

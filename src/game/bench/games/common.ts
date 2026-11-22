@@ -27,8 +27,8 @@ export function hitY(ray: Ray, h: number): Vector3 | null {
 }
 
 /** Little puff/spark emitter. */
-export function puffs(scene: Scene, kind: "smoke" | "sparks" | "confetti"): ParticleSystem {
-  const ps = new ParticleSystem(`ps-${kind}`, kind === "confetti" ? 300 : 120, scene);
+export function puffs(scene: Scene, kind: "smoke" | "sparks"): ParticleSystem {
+  const ps = new ParticleSystem(`ps-${kind}`, 120, scene);
   ps.particleTexture = particleDot(scene);
   ps.emitter = Vector3.Zero();
   ps.minEmitBox = ps.maxEmitBox = Vector3.Zero();
@@ -45,7 +45,7 @@ export function puffs(scene: Scene, kind: "smoke" | "sparks" | "confetti"): Part
     ps.minEmitPower = 0.3;
     ps.maxEmitPower = 0.6;
     ps.gravity = new Vector3(0, 0.02, 0);
-  } else if (kind === "sparks") {
+  } else {
     ps.color1 = new Color4(1, 0.8, 0.3, 1);
     ps.color2 = new Color4(1, 0.4, 0.2, 1);
     ps.colorDead = new Color4(1, 0.2, 0, 0);
@@ -59,19 +59,6 @@ export function puffs(scene: Scene, kind: "smoke" | "sparks" | "confetti"): Part
     ps.maxEmitPower = 0.5;
     ps.gravity = new Vector3(0, -2, 0);
     ps.blendMode = ParticleSystem.BLENDMODE_ADD;
-  } else {
-    ps.color1 = new Color4(1, 0.5, 0.3, 1);
-    ps.color2 = new Color4(0.3, 0.6, 1, 1);
-    ps.colorDead = new Color4(1, 1, 0.3, 0);
-    ps.minSize = 0.01;
-    ps.maxSize = 0.02;
-    ps.minLifeTime = 0.8;
-    ps.maxLifeTime = 1.4;
-    ps.direction1 = new Vector3(-0.4, 1.5, -0.4);
-    ps.direction2 = new Vector3(0.4, 2.2, 0.4);
-    ps.minEmitPower = 0.4;
-    ps.maxEmitPower = 0.9;
-    ps.gravity = new Vector3(0, -1.5, 0);
   }
   ps.emitRate = 0;
   ps.start();

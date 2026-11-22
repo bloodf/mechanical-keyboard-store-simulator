@@ -37,7 +37,7 @@ export function openSoundBoard(ui: Ui) {
       );
       p.addControl(grid);
       const foot = stack({ horizontal: true, h: 52, spacing: S.md, y: -S.lg, ha: H_CENTER, va: V_BOTTOM });
-      foot.addControl(button(t("soundBoard.newVoice"), { w: 260, onClick: () => ((voice = randomVoiceParams(Math.random)), play("voice.talk", { params: { voice } })) }));
+      foot.addControl(button(t("soundBoard.newVoice"), { w: 260, testId: "sb-voice", onClick: () => ((voice = randomVoiceParams(Math.random)), play("voice.talk", { params: { voice } })) }));
       foot.addControl(button(t("soundBoard.close"), { w: 180, variant: "primary", testId: "sound-board-close", onClick: close }));
       p.addControl(foot);
       p.addControl(label(t("soundBoard.hint"), { size: T.tiny, color: C.inkFaint, align: H_CENTER, y: -82, va: V_BOTTOM, h: 18 }));

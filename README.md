@@ -35,8 +35,18 @@ npm run preview    # serve the production build on :4173
 ## Test
 
 ```bash
-npm test             # unit tests: RNG, save/tamper/migrations, i18n, layouts, balance, scoring, workshop economy
-npm run test:e2e     # needs `npm run dev`: smoke (desktop + phone), audio check, full workshop loop with real input
+npm test                 # unit tests (vitest): game rules, saves & anti-cheat, orders, stock, economy, tools,
+                         # keycap/board geometry (Babylon NullEngine), glb models, icons, i18n
+npm run test:e2e         # end-to-end (needs `npm run dev`): the real game in Chromium with real mouse/keyboard/touch
+                         #   smoke.cjs     title, settings, setup, encrypted save, reload, 2nd tab, cheater screen (desktop + phone)
+                         #   audio.cjs     renders all 59 sounds offline and checks them
+                         #   build.cjs     a full keyboard through every 3D minigame, supplier + courier, ship, mail, next day, resume
+                         #   workshop.cjs  every panel & button: orders, membrane, stock, suppliers, tools, mail, menu, stats,
+                         #                 settings & quality, dev tools, closing time, look-around, Esc
+                         #   variants.cjs  Choc low-profile, Box, plateless, skips, back, swaps, faults, late delivery,
+                         #                 cancellation, Grandma's rescue
+                         #   mobile.cjs    phone portrait: panels, cart dialog, mail, building with taps
+npm run coverage         # unit coverage + e2e coverage (V8, from the browser) merged → coverage/merged/index.html
 ```
 
 The whole UI is drawn in the canvas, so end-to-end tests find controls through a dev-only hook

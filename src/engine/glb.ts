@@ -121,7 +121,9 @@ export async function loadGlb(url: string, scaleToMm = 1): Promise<GlbFile> {
     }
     for (const c of node.children ?? []) visit(c, world);
   };
-  const roots = g.scenes?.[0]?.nodes ?? g.nodes!.map((_, i) => i);
+  // no scene: the roots are the nodes nobody lists as a child
+  const children = new Set((g.nodes ?? []).flatMap((n) => n.children ?? []));
+  const roots = g.scenes?.[0]?.nodes ?? (g.nodes ?? []).map((_, i) => i).filter((i) => !children.has(i));
   for (const r of roots) visit(r, Matrix.Identity());
 
   const materials: GlbMaterialDef[] = (g.materials ?? []).map((m) => {

@@ -1,7 +1,7 @@
 {
   "name": "mechanical-keyboard-store-simulator",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
@@ -11,7 +11,10 @@
     "test": "vitest run",
     "art:layouts": "node --experimental-strip-types -e \"import('./src/data/layouts.ts').then(m=>{const o={};for(const id of m.LAYOUT_IDS)o[id]=m.getLayout(id);require('fs').writeFileSync('art/build/layouts.json',JSON.stringify(o))})\"",
     "art:preview": "~/.venvs/bpy/bin/python art/blender/poc_keyboard.py hero",
-    "test:e2e": "node tests/e2e/smoke.cjs && node tests/e2e/audio.cjs && node tests/e2e/build.cjs"
+    "test:e2e": "node tests/e2e/smoke.cjs && node tests/e2e/audio.cjs && node tests/e2e/build.cjs && node tests/e2e/workshop.cjs && node tests/e2e/variants.cjs && node tests/e2e/mobile.cjs",
+    "test:unit:coverage": "vitest run --coverage",
+    "coverage": "vitest run --coverage && rm -rf coverage/e2e-raw && COVERAGE=1 npm run test:e2e && node scripts/coverage.mjs",
+    "coverage:report": "node scripts/coverage.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "^9.33.2",
@@ -23,7 +26,10 @@
     "earcut": "^3.2.4"
   },
   "devDependencies": {
+    "@napi-rs/canvas": "^1.1.1",
     "@types/node": "^22.20.5",
+    "@vitest/coverage-v8": "^5.1.1",
+    "monocart-coverage-reports": "^2.13.0",
     "playwright": "^1.64.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
